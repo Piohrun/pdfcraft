@@ -1,5 +1,6 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-15 · **Change:** minor (M2: objects in one large object stream are read in linear time; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-14 · **Change:** minor (M14: the Italian catalog has every entry the other catalogs had and the code looks up, 2,528 entries; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (M2/M6: spot-colour images convert once per pixel value; widget placement and the Fields panel scale with the field count; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (M3 candidate: coordinate control clicks on slow frames and coalesced text selection; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -186,6 +187,7 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 | 2026-10-12 | minor | M14/#1395: XDG configuration preferences, safe migration and fallback; logs/recovery retain data locations, portable/non-XDG unchanged. Estimates unchanged. |
 | 2026-10-12 | minor | M6: XFDF field import and data extraction preserve all text around XML comments and processing instructions; synthetic save/reopen regressions. Estimates unchanged. |
 | 2026-10-12 | minor | M2: preserve whitespace-bounded EI bytes in known unfiltered inline images; row padding, masks and aliases tested, with independent saved-PDF pixel checks. Estimates unchanged. |
+| 2026-10-15 | minor | M2: an object stream's index is parsed once per stream (hayro-syntax patch 18), not once per object fetched from it; a page whose 65,542 objects share one stream draws in 0.5 s instead of 37 s. Estimates unchanged. |
 | 2026-10-12 | minor | M1 #1338: a full rewrite keeps unknown trailer entries and objects reachable only from them. Estimates unchanged. |
 | 2026-10-12 | minor | M7 #1443: adding a word to a multi-line paragraph keeps its line breaks. Composite subset fonts whose `/W` leaves out default-width glyphs (Chrome, Skia) no longer measure those letters as missing, and paragraphs drawn turned on the page group into rows along their own baselines. Estimates unchanged. |
 | 2026-10-14 | minor | M14: Italian catalog completed (2,528 entries) and dropped from the ≈ 2,000–2,140-entry group; estimates unchanged |
