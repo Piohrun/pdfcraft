@@ -2806,7 +2806,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut field_placed = false;
     let mut open_table: Option<(usize, [f64; 4])> = None;
     // The table being set up in its window, shown on its own document's page.
-    let table_preview = app.field_table_draft.as_ref().filter(|d| d.doc == view.id).map(crate::field_table_ui::FieldTableDraft::preview);
+    let table_preview = app.field_table_draft.as_mut().filter(|d| d.doc == view.id).and_then(|d| Some(d.preview(info.pages.get(d.page)?, &form)));
+    let generation = doc.edit_generation();
     let can_modify = doc.allows_modification();
     if preparing {
         crate::prepare::after_refresh(view, &form);
@@ -4072,7 +4073,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         app.dialog = Some(crate::Dialog::PageBoxes);
     }
     if let Some((page, rect)) = open_table {
-        app.field_table_draft = Some(crate::field_table_ui::FieldTableDraft::new(app.views[index].id, page, rect, &form));
+        app.field_table_draft = Some(crate::field_table_ui::FieldTableDraft::new(app.views[index].id, page, rect, &form, generation));
         app.dialog = Some(crate::Dialog::FieldTable);
     }
     if let Some(n) = form_notice {

@@ -386,7 +386,13 @@ impl Automation {
             table.first_row = a.opt_int("first_row")?.map_or(1, |n| usize::try_from(n).unwrap_or(usize::MAX));
             let info = doc.info.pages.get(page).ok_or_else(|| bad(format!("page {} does not exist", page + 1)))?;
             let edit = field_table::edit(&table, page, info, &doc.form).map_err(|e| bad(e.to_string()))?;
-            let fields: Vec<String> = table.cells().map_err(|e| bad(e.to_string()))?.into_iter().map(|c| c.name).collect();
+            // The names the batch adds, in the order it adds them.
+            let fields: Vec<String> = match &edit {
+                Edit::Batch { edits, .. } => {
+                    edits.iter().filter_map(|e| if let Edit::AddField { name, .. } = e { name.clone() } else { None }).collect()
+                }
+                _ => Vec::new(),
+            };
             (edit, fields)
         };
         let mut out = self.apply(a, edit)?;

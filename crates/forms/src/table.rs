@@ -183,13 +183,21 @@ pub fn column_pattern(base: &str, column: usize) -> String {
 }
 
 /// The first of "Table1", "Table2", … that no field in `existing` (full names) starts with, so a
-/// new table's names are free.
+/// new table's names are free. One pass over the names, however many the form has.
 pub fn free_base<'a>(existing: impl IntoIterator<Item = &'a str>) -> String {
-    let existing: Vec<&str> = existing.into_iter().collect();
-    // "Table1" is taken by "Table1", "Table1_3" and "Table1.x", not by "Table12_1".
-    let taken = |base: &str| existing.iter().any(|name| name.strip_prefix(base).is_some_and(|rest| !rest.starts_with(|c: char| c.is_ascii_digit())));
-    // One of the first `existing.len() + 1` is always free.
-    (1..=existing.len().saturating_add(1)).map(|n| format!("Table{n}")).find(|base| !taken(base)).unwrap_or_else(|| "Table".to_owned())
+    // The K of every "TableK" a name starts with: "Table1", "Table1_3" and "Table1.x" take 1, and
+    // "Table12_1" takes 12, not 1.
+    let taken: HashSet<u64> = existing
+        .into_iter()
+        .filter_map(|name| {
+            let rest = name.strip_prefix("Table")?;
+            let digits = rest.get(..rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len()))?;
+            digits.parse().ok()
+        })
+        .collect();
+    // One of the first `taken.len() + 1` is always free.
+    let k = (1..=taken.len() as u64 + 1).find(|k| !taken.contains(k)).unwrap_or(1);
+    format!("Table{k}")
 }
 
 /// What may stand on either side of an `N` that is the row number.
@@ -201,7 +209,8 @@ const SEPARATORS: [char; 4] = ['_', '-', '/', ':'];
 /// - `{row}`, `{r}`, `{n}` and `#`: the row number; `[row]`, `[r]` and `[n]`: the row number in
 ///   brackets (`item[N]` → `item[1]`);
 /// - `{col}` and `{c}`, `[col]` and `[c]`: the column number;
-/// - `{seq}` and `[seq]`: the cell number;
+/// - `{seq}` and `[seq]`: the cell number, counting along the rows from the table's first row
+///   number, so a table starting at row 1 numbers its cells 1, 2, 3, …;
 /// - with no row or cell number, an `N` or `n` standing alone after `_`, `-`, `/` or `:`
 ///   (`price_N`, `line-n-total`) is the row number, so the N in `Name` or `NET_N` stays;
 /// - with no row or cell number still, the row number goes at the end.
@@ -559,6 +568,9 @@ mod tests {
         assert_eq!(free_base(["Table1", "Table2.x", "Table3_N"]), "Table4");
         // "Table12_1" belongs to Table12, not Table1.
         assert_eq!(free_base(["Table12_1", "Tables"]), "Table1");
+        // As fast for a form with thousands of fields: one pass, not one per candidate.
+        let many: Vec<String> = (1..=20_000).map(|k| format!("Table{k}_1")).collect();
+        assert_eq!(free_base(many.iter().map(String::as_str)), "Table20001");
         let t = FieldTable::new([0.0, 0.0, 200.0, 200.0], &free_base(["Table1_1"]));
         let names: Vec<_> = t.cells_for(["Table1_1"]).unwrap().into_iter().map(|c| c.name).collect();
         assert_eq!(names, ["Table2_1", "Table2_2", "Table2_3", "Table2_4"]);

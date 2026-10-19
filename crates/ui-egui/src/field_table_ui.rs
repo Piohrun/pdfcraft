@@ -3,13 +3,17 @@
 //! the engine's [`FieldTable`]; this is its window.
 //!
 //! The window is not modal, so that the page stays in view, but it belongs to one page of one
-//! document: it closes when that document stops being the one prepared, and adds the table there.
+//! document as it was when the window opened: it closes when that document stops being the one
+//! prepared or changes in any way (a page rotated, moved or deleted, an edit undone), and adds the
+//! table there.
 
 use std::ops::RangeInclusive;
+use std::sync::Arc;
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, RichText, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::field_table::{self, Cell, FieldTable, MAX_COLUMNS, MAX_FIRST_ROW, MAX_ROWS, TableError};
 use pdfcraft_engine::{DocId, Edit, FormField};
+use pdfcraft_render::PageInfo;
 
 use crate::canvas::PageXform;
 use crate::{Dialog, PdfCraftApp, i18n, theme, widgets};
@@ -21,7 +25,7 @@ const ERROR_RED: Color32 = Color32::from_rgb(0xD1, 0x3B, 0x3B);
 const MIN_SHARE: f64 = 0.04;
 
 /// The table being set up in the window, and where it goes.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct FieldTableDraft {
     /// The document the table goes in.
     pub doc: DocId,
@@ -30,13 +34,34 @@ pub struct FieldTableDraft {
     pub table: FieldTable,
     /// What added columns are named after: the first free "TableK" when the window opened.
     base: String,
+    /// The document's edit generation when the window opened: any edit since closes it.
+    generation: u64,
+    /// The table as last laid out, kept until the table changes.
+    laid: Option<Arc<Laid>>,
+    /// A field in the window had the keyboard last frame, so Escape leaves the field.
+    typing: bool,
+}
+
+/// Two drafts are the same table in the same place; what is kept for the next frame isn't part of it.
+impl PartialEq for FieldTableDraft {
+    fn eq(&self, other: &Self) -> bool {
+        (self.doc, self.page, &self.table, &self.base, self.generation) == (other.doc, other.page, &other.table, &other.base, other.generation)
+    }
+}
+
+/// A table laid out and checked once, for every frame it stays the same: the cells the page and the
+/// window show, and the edit Add fields applies. Up to 100 × 50 cells, so not every frame.
+#[derive(Debug)]
+pub(crate) struct Laid {
+    table: FieldTable,
+    cells: Result<Vec<Cell>, TableError>,
+    edit: Result<Edit, TableError>,
 }
 
 /// What the page shows of the table being set up: its cells, or why it can't be laid out.
 pub(crate) struct Preview {
     page: usize,
-    rect: [f64; 4],
-    cells: Result<Vec<Cell>, TableError>,
+    laid: Arc<Laid>,
 }
 
 /// How the window was left this frame.
@@ -46,15 +71,29 @@ enum Choice {
 }
 
 impl FieldTableDraft {
-    /// A table filling `rect` (view space) on `page`, named after the first base `form` leaves free.
-    pub(crate) fn new(doc: DocId, page: usize, rect: [f64; 4], form: &[FormField]) -> Self {
+    /// A table filling `rect` (view space) on `page` of a document at edit `generation`, named after
+    /// the first base `form` leaves free.
+    pub(crate) fn new(doc: DocId, page: usize, rect: [f64; 4], form: &[FormField], generation: u64) -> Self {
         let base = field_table::free_base(form.iter().map(|f| f.name.as_str()));
-        FieldTableDraft { doc, page, table: FieldTable::new(rect, &base), base }
+        FieldTableDraft { doc, page, table: FieldTable::new(rect, &base), base, generation, laid: None, typing: false }
     }
 
-    /// What the page shows of this table this frame: worked out once, then painted on its page.
-    pub(crate) fn preview(&self) -> Preview {
-        Preview { page: self.page, rect: self.table.rect, cells: self.table.cells() }
+    /// The table laid out on its page (`info`, in a form whose fields are `form`), worked out again
+    /// only when the table has changed since. The form can't change under it: an edit closes the
+    /// window.
+    pub(crate) fn laid(&mut self, info: &PageInfo, form: &[FormField]) -> Arc<Laid> {
+        if let Some(laid) = self.laid.as_ref().filter(|l| l.table == self.table) {
+            return Arc::clone(laid);
+        }
+        let laid =
+            Arc::new(Laid { table: self.table.clone(), cells: self.table.cells(), edit: field_table::edit(&self.table, self.page, info, form) });
+        self.laid = Some(Arc::clone(&laid));
+        laid
+    }
+
+    /// What the page shows of this table this frame.
+    pub(crate) fn preview(&mut self, info: &PageInfo, form: &[FormField]) -> Preview {
+        Preview { page: self.page, laid: self.laid(info, form) }
     }
 
     /// Each column's share of the table's width, together 1.
@@ -100,7 +139,12 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let active = app.active_ids().map(|(_, id)| id);
     let preparing = app.is_preparing();
     let belongs = app.field_table_draft.as_ref().is_some_and(|d| {
-        active == Some(d.doc) && preparing && app.session.get(d.doc).is_some_and(|doc| d.page < doc.info.pages.len() && doc.allows_modification())
+        active == Some(d.doc)
+            && preparing
+            && app
+                .session
+                .get(d.doc)
+                .is_some_and(|doc| doc.edit_generation() == d.generation && d.page < doc.info.pages.len() && doc.allows_modification())
     });
     if !belongs {
         close(app);
@@ -113,7 +157,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let t = theme::Tokens::get(ctx);
     let mut open = true;
     let mut choice = None;
-    let mut checked = None;
+    let mut laid = None;
     egui::Window::new(tl!("Text Field Table"))
         .id(egui::Id::new("field_table_window"))
         .open(&mut open)
@@ -125,18 +169,20 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         .default_pos(egui::pos2(120.0, 100.0))
         .show(ctx, |ui| {
             widgets::begin_dialog(ui);
-            let (c, edit) = body(ui, draft, info, form, &t);
+            let (c, l) = body(ui, draft, info, form, &t);
             choice = c;
-            checked = Some(edit);
+            laid = Some(l);
         });
-    // Escape closes it, as it closes a modal dialog. Enter is left to the field being typed in.
-    let escape = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+    // Escape closes it, as it closes a modal dialog, unless a field had the keyboard: then Escape
+    // only leaves the field, and what was set up stays. Enter is left to the field being typed in.
+    let escape = !draft.typing && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+    draft.typing = ctx.egui_wants_keyboard_input();
     match choice {
         _ if !open || escape => close(app),
         Some(Choice::Cancel) => close(app),
         // Added, the window closes; refused, it stays as it is, with the notice saying why.
         Some(Choice::Add) => {
-            if let Some(Ok(edit)) = checked
+            if let Some(Ok(edit)) = laid.as_deref().map(|l| l.edit.clone())
                 && app.apply_edit(edit)
             {
                 close(app);
@@ -155,14 +201,8 @@ fn close(app: &mut PdfCraftApp) {
 }
 
 /// The window's controls, the names the table will have, and why it can't be added if it can't.
-/// Returns what was chosen and the edit adding the table as it now stands.
-fn body(
-    ui: &mut egui::Ui,
-    d: &mut FieldTableDraft,
-    info: &pdfcraft_render::PageInfo,
-    form: &[FormField],
-    t: &theme::Tokens,
-) -> (Option<Choice>, Result<Edit, TableError>) {
+/// Returns what was chosen and the table as it now stands, laid out and checked.
+fn body(ui: &mut egui::Ui, d: &mut FieldTableDraft, info: &PageInfo, form: &[FormField], t: &theme::Tokens) -> (Option<Choice>, Arc<Laid>) {
     let columns = d.table.columns.len();
     egui::Grid::new("field_table_grid").num_columns(2).spacing([14.0, 8.0]).min_col_width(120.0).show(ui, |ui| {
         ui.label(tl!("Rows"));
@@ -208,12 +248,12 @@ fn body(
     ui.add(egui::Label::new(RichText::new(hint).color(t.text_muted).size(11.0)).wrap());
     ui.add_space(4.0);
     // The widths shown don't depend on the names being typed below.
-    let layout = d.table.cells();
+    let layout = d.laid(info, form);
     let shares = d.shares();
     let scrolls = d.table.columns.len() > 3;
     let mut column_fields = |ui: &mut egui::Ui| {
         for (c, column) in d.table.columns.iter_mut().enumerate() {
-            let width = layout.as_ref().ok().and_then(|cells| cells.get(c)).map(|cell| cell.rect[2] - cell.rect[0]);
+            let width = layout.cells.as_ref().ok().and_then(|cells| cells.get(c)).map(|cell| cell.rect[2] - cell.rect[0]);
             let share = shares.get(c).copied().unwrap_or_default();
             ui.horizontal(|ui| {
                 ui.label(RichText::new(column_label(c)).strong());
@@ -234,9 +274,9 @@ fn body(
     }
 
     ui.add_space(8.0);
-    // The same edit Add fields applies, and the names, worked out from the table as it now stands.
-    let checked = field_table::edit(&d.table, d.page, info, form);
-    if let Ok(cells) = &d.table.cells() {
+    // The names, and the edit Add fields applies, from the table as it now stands.
+    let laid = d.laid(info, form);
+    if let Ok(cells) = &laid.cells {
         let names: Vec<&str> = cells.iter().map(|c| c.name.as_str()).collect();
         let shown = match names.as_slice() {
             [] => String::new(),
@@ -249,21 +289,21 @@ fn body(
             ui.add(egui::Label::new(RichText::new(shown).font(theme::medium(12.0))).truncate());
         });
     }
-    if let Err(e) = &checked {
+    if let Err(e) = &laid.edit {
         ui.add(egui::Label::new(RichText::new(e.said(&i18n::words)).color(ERROR_RED).size(11.0)).wrap());
     }
 
     ui.add_space(14.0);
     let mut choice = None;
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        if ui.add_enabled_ui(checked.is_ok(), |ui| widgets::pill_button(ui, tl!("Add fields"), true)).inner.clicked() {
+        if ui.add_enabled_ui(laid.edit.is_ok(), |ui| widgets::pill_button(ui, tl!("Add fields"), true)).inner.clicked() {
             choice = Some(Choice::Add);
         }
         if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
             choice = Some(Choice::Cancel);
         }
     });
-    (choice, checked)
+    (choice, laid)
 }
 
 /// "Column 2" for the column at 0-based `index`.
@@ -355,7 +395,8 @@ fn column_bar(ui: &mut egui::Ui, d: &mut FieldTableDraft, t: &theme::Tokens) {
 }
 
 /// The table being set up, on its page: each cell with its name, or the table's outline in red
-/// with the reason it can't be laid out.
+/// with the reason it can't be laid out. Only the cells in view are drawn, and only those with room
+/// for it get their name: a table can have 5,000 cells.
 pub(crate) fn paint_preview(painter: &egui::Painter, xf: &PageXform, page: usize, preview: &Preview) {
     if preview.page != page {
         return;
@@ -363,7 +404,8 @@ pub(crate) fn paint_preview(painter: &egui::Painter, xf: &PageXform, page: usize
     let zoom = (xf.rect.width() / xf.pw.max(1.0)).clamp(0.5, 3.0);
     let font = theme::regular((9.0 * zoom).clamp(7.0, 13.0));
     let on_screen = |r: [f64; 4]| xf.view_rect([r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]);
-    let outline = on_screen(preview.rect);
+    let outline = on_screen(preview.laid.table.rect);
+    let visible = painter.clip_rect();
     // A tag of white `text` in the middle of `area`, kept inside it.
     let tag = |area: Rect, text: String, fill: Color32| {
         let galley = painter.layout_no_wrap(text, font.clone(), Color32::WHITE);
@@ -372,14 +414,19 @@ pub(crate) fn paint_preview(painter: &egui::Painter, xf: &PageXform, page: usize
         inside.rect_filled(tag, CornerRadius::same(1), fill);
         inside.galley(tag.min + vec2(3.0, 1.0), galley, Color32::WHITE);
     };
-    match &preview.cells {
+    match &preview.laid.cells {
         Ok(cells) => {
             painter.rect_stroke(outline, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE.gamma_multiply(0.3)), egui::StrokeKind::Outside);
             for cell in cells {
                 let r = on_screen(cell.rect);
+                if !visible.intersects(r) {
+                    continue;
+                }
                 painter.rect_filled(r, CornerRadius::ZERO, crate::prepare::FIELD_FILL);
                 painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.5, SELECT_BLUE), egui::StrokeKind::Inside);
-                tag(r, cell.name.clone(), SELECT_BLUE);
+                if r.height() >= font.size + 2.0 && r.width() >= 24.0 {
+                    tag(r, cell.name.clone(), SELECT_BLUE);
+                }
             }
         }
         Err(e) => {
@@ -396,7 +443,7 @@ mod tests {
     use super::*;
 
     fn draft(columns: usize) -> FieldTableDraft {
-        let mut d = FieldTableDraft::new(DocId(1), 0, [0.0, 0.0, 400.0, 200.0], &[]);
+        let mut d = FieldTableDraft::new(DocId(1), 0, [0.0, 0.0, 400.0, 200.0], &[], 0);
         d.table.set_columns(columns, &d.base);
         d
     }
@@ -439,9 +486,25 @@ mod tests {
         assert!(d.table.columns.iter().all(|c| c.width == 1.0));
     }
 
+    /// The window and the page share one layout of the table, worked out again only when the table
+    /// changes: at 100 × 50 cells, laying it out several times a frame was 25,000 names a frame.
+    #[test]
+    fn the_layout_is_worked_out_again_only_when_the_table_changes() {
+        let info = PageInfo { width: 400.0, height: 300.0, label: "1".into(), crop: [0.0, 0.0, 400.0, 300.0], rotation: 0 };
+        let mut d = draft(2);
+        let first = d.laid(&info, &[]);
+        assert!(Arc::ptr_eq(&first, &d.laid(&info, &[])), "the same table, the same layout");
+        assert!(Arc::ptr_eq(&first, &d.preview(&info, &[]).laid), "the page shares it");
+        d.table.rows = 5;
+        let second = d.laid(&info, &[]);
+        assert!(!Arc::ptr_eq(&first, &second), "a changed table is laid out again");
+        assert_eq!(second.cells.as_ref().map(Vec::len), Ok(10));
+        assert!(second.edit.is_ok());
+    }
+
     #[test]
     fn added_columns_are_named_after_the_tables_base() {
-        let mut d = FieldTableDraft::new(DocId(1), 0, [0.0, 0.0, 400.0, 200.0], &[]);
+        let mut d = FieldTableDraft::new(DocId(1), 0, [0.0, 0.0, 400.0, 200.0], &[], 0);
         d.table.set_columns(2, &d.base);
         let patterns: Vec<_> = d.table.columns.iter().map(|c: &TableColumn| c.pattern.as_str()).collect();
         assert_eq!(patterns, ["Table1_N", "Table1_c2_N"]);

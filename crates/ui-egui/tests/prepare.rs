@@ -766,3 +766,60 @@ fn the_table_window_closes_when_its_document_is_left() {
     h.run_steps(2);
     assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false));
 }
+
+/// The window belongs to the page as it was when it opened: rotated (or moved, deleted, undone)
+/// under it, the page would put the area the table was set up for somewhere else.
+#[test]
+fn the_table_window_closes_when_the_document_changes_under_it() {
+    let mut h = harness();
+    let before = names(&h);
+    draw_table(&mut h);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    h.run_steps(2);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false), "closed by the rotation");
+    assert_eq!(names(&h), before, "nothing added");
+}
+
+/// Escape in a name field leaves the field, as it does in any field; it closed the window too,
+/// and the column setup with it.
+#[test]
+fn escape_in_a_name_field_leaves_the_field_not_the_table() {
+    let mut h = harness();
+    draw_table(&mut h);
+    // The app's own text boxes (zoom, page number) are inputs too: take the one in the window.
+    let window = h.get_by_label("Text Field Table").rect();
+    let field =
+        h.query_all(by().role(Role::TextInput)).map(|n| n.rect()).find(|r| window.contains(r.center())).expect("the first column's name field");
+    h.hover_at(field.center());
+    h.drag_at(field.center());
+    h.run_steps(1);
+    h.drop_at(field.center());
+    h.run_steps(2);
+    h.event(egui::Event::Text("x".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::FieldTable), "still open");
+    assert_eq!(h.state().field_table_draft.as_ref().map(|d| d.table.columns[0].pattern.as_str()), Some("Table1_Nx"), "what was typed stays");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false), "a second Escape closes it");
+}
+
+/// A click puts the default 180 × 110 table's corner at the pointer; near the page's edges it is
+/// moved in so that all of it is on the page (here 5 pt from the right, 100 pt from the bottom).
+#[test]
+fn a_table_clicked_near_the_page_edge_stays_on_the_page() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("form.add.text_table"));
+    h.run_steps(2);
+    let p = at(&h, 295.0, 300.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+    let r = h.state().field_table_draft.as_ref().expect("the table's window").table.rect;
+    assert!([120.0, 290.0, 300.0, 400.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "on the 300 × 400 page: {r:?}");
+}

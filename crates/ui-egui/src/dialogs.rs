@@ -727,7 +727,8 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 });
                 return;
             }
-            // Shown above, as a window of its own.
+            // Never reached: `dialogs` shows this movable window above and returns before the modal.
+            // The arm keeps the match exhaustive.
             Dialog::FieldTable => close = true,
             Dialog::Optimize => {
                 let (ok, cancel) = crate::optimize_ui::body(ui, &mut app.optimize_draft, &t);

@@ -186,12 +186,17 @@ fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
 }
 
 /// Where a table goes, in view space, for a screen rect drawn with the table tool: a click (a rect
-/// under 4 pixels either way) puts the default size's top-left corner at the pointer.
+/// under 4 pixels either way) puts the default size's top-left corner at the pointer, moved in from
+/// the page's edges as far as it takes to stay on the page.
 fn table_rect(xf: &PageXform, r: Rect) -> [f64; 4] {
     let (x0, y0) = xf.screen_to_view(r.min);
     if r.width() < 4.0 || r.height() < 4.0 {
-        let (w, h) = FieldTool::TextTable.default_size();
-        return [f64::from(x0), f64::from(y0), f64::from(x0) + w, f64::from(y0) + h];
+        let (pw, ph) = (f64::from(xf.pw), f64::from(xf.ph));
+        let (dw, dh) = FieldTool::TextTable.default_size();
+        // Smaller than the default only on a page smaller than it.
+        let (w, h) = (dw.min(pw), dh.min(ph));
+        let (x, y) = (f64::from(x0).min(pw - w).max(0.0), f64::from(y0).min(ph - h).max(0.0));
+        return [x, y, x + w, y + h];
     }
     let (x1, y1) = xf.screen_to_view(r.max);
     [x0, y0, x1, y1].map(f64::from)
