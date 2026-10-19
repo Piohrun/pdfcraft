@@ -2340,6 +2340,7 @@ animation effects	Off	Ki
 	no unused output name	nincs szabad kimeneti név
 	no output folder was chosen	nincs kiválasztva kimeneti mappa
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF letöltve|{n} PDF letöltve
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} számítás mostantól az új nevet használja.|{n} számítás mostantól az új nevet használja.
 	Scan	Beolvasás
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Írja alá a nevét egy fehér papírlapon, és fényképezze le erős, egyenletes fényben (vakuval). Válassza ki a fényképet, vagy húzza ide: a PdfCraft megkeresi az aláírást, és eltávolítja a papírt.
 	Choose photo…	Fénykép kiválasztása…

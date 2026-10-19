@@ -2342,6 +2342,7 @@ animation effects	Off	Aus
 	no unused output name	kein freier Ausgabename
 	no output folder was chosen	kein Ausgabeordner gewählt
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF heruntergeladen|{n} PDFs heruntergeladen
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} Berechnung verwendet jetzt den neuen Namen.|{n} Berechnungen verwenden jetzt den neuen Namen.
 	Scan	Scannen
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Unterschreiben Sie auf einem weißen Blatt Papier und fotografieren Sie es bei hellem, gleichmäßigem Licht (mit Blitz). Wählen Sie das Foto aus oder ziehen Sie es hierher: PdfCraft findet die Unterschrift und entfernt das Papier.
 	Choose photo…	Foto auswählen…

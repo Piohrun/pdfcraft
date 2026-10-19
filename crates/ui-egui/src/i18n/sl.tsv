@@ -2345,6 +2345,7 @@ animation effects	Off	Izklopljeni
 	no unused output name	ni prostega izhodnega imena
 	no output folder was chosen	izhodna mapa ni bila izbrana
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Prenesen {n} PDF|Prenesena {n} PDF-ja|Preneseni {n} PDF-ji|Prenesenih {n} PDF-jev
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} izračun zdaj uporablja novo ime.|{n} izračuna zdaj uporabljata novo ime.|{n} izračuni zdaj uporabljajo novo ime.|{n} izračunov zdaj uporablja novo ime.
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} ime polja se ujema z imeni iz prejšnjih datotek in bo preimenovano: {list}|{n} imeni polj se ujemata z imeni iz prejšnjih datotek in bosta preimenovani: {list}|{n} imena polj se ujemajo z imeni iz prejšnjih datotek in bodo preimenovana: {list}|{n} imen polj se ujema z imeni iz prejšnjih datotek in bo preimenovanih: {list}
 	Scan	Skeniraj
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Podpišite se na list belega papirja in ga fotografirajte v močni, enakomerni svetlobi (uporabite bliskavico). Izberite fotografijo ali jo spustite sem: PdfCraft poišče podpis in odstrani papir.

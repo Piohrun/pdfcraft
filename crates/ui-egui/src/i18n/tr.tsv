@@ -2326,6 +2326,7 @@ animation effects	Off	Kapalı
 	no unused output name	kullanılmayan çıktı adı yok
 	no output folder was chosen	çıktı klasörü seçilmedi
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF indirildi
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} hesaplama artık yeni adı kullanıyor.
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} alan adı önceki dosyalarla çakışıyor ve yeniden adlandırılacak: {list}
 	Scan	Tara
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Beyaz bir kâğıda imzanızı atın ve parlak, eşit ışıkta fotoğrafını çekin (flaş kullanın). Fotoğrafı seçin veya buraya bırakın: PdfCraft imzayı bulur ve kâğıdı kaldırır.

@@ -2341,6 +2341,7 @@ animation effects	Off	オフ
 	no unused output name	使用可能な出力名がありません
 	no output folder was chosen	出力フォルダーが選択されていません
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} 個の PDF をダウンロードしました
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} 件の計算式を新しい名前に更新しました。
 	Scan	スキャン
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	白い紙に署名し、明るく均一な光の下で写真を撮ってください（フラッシュを使用）。写真を選択するか、ここにドロップしてください。PdfCraft が署名を見つけ、紙の部分を取り除きます。
 	Choose photo…	写真を選択…

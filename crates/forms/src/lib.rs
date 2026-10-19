@@ -970,6 +970,17 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
     Ok(changed)
 }
 
+/// The fields whose calculation differs between two readings of a form, matched by field object
+/// and named as in `after`: the formulas an edit rewrote, such as a rename's.
+pub fn calculations_changed(before: &[Field], after: &[Field]) -> Vec<String> {
+    let before: std::collections::HashMap<ObjRef, &af::Actions> = before.iter().map(|f| (f.obj, &f.actions)).collect();
+    after
+        .iter()
+        .filter(|f| before.get(&f.obj).is_some_and(|b| b.calculate != f.actions.calculate || b.scripts.calculate != f.actions.scripts.calculate))
+        .map(|f| f.name.clone())
+        .collect()
+}
+
 fn invalid<T>(m: impl Into<String>) -> Result<T, FormError> {
     Err(FormError::Invalid(m.into()))
 }
