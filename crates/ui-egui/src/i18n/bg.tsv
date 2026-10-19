@@ -2304,6 +2304,7 @@ animation effects	Off	Изключени
 	no unused output name	няма свободно име за изходния файл
 	no output folder was chosen	не е избрана папка за изхода
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Изтеглен е {n} PDF|Изтеглени са {n} PDF файла
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} изчисление вече използва новото име.|{n} изчисления вече използват новото име.
 	Scan	Сканиране
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Подпишете се на лист бяла хартия и го снимайте на ярка, равномерна светлина (със светкавица). Изберете снимката или я пуснете тук: PdfCraft открива подписа и премахва хартията.
 	Choose photo…	Избор на снимка…

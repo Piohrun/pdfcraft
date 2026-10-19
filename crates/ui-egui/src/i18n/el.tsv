@@ -2338,6 +2338,7 @@ animation effects	Off	Ανενεργά
 	no unused output name	δεν υπάρχει διαθέσιμο όνομα εξόδου
 	no output folder was chosen	δεν επιλέχθηκε φάκελος εξόδου
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Λήφθηκε {n} PDF|Λήφθηκαν {n} PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} υπολογισμός χρησιμοποιεί πλέον το νέο όνομα.|{n} υπολογισμοί χρησιμοποιούν πλέον το νέο όνομα.
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} όνομα πεδίου συγκρούεται με προηγούμενα αρχεία και θα μετονομαστεί: {list}|{n} ονόματα πεδίων συγκρούονται με προηγούμενα αρχεία και θα μετονομαστούν: {list}
 	Scan	Σάρωση
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Υπογράψτε σε ένα λευκό φύλλο χαρτιού και φωτογραφίστε το σε έντονο, ομοιόμορφο φως (χρησιμοποιήστε το φλας). Επιλέξτε τη φωτογραφία ή αφήστε την εδώ: το PdfCraft βρίσκει την υπογραφή και αφαιρεί το χαρτί.

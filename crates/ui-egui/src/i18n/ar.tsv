@@ -2362,6 +2362,7 @@ animation effects	Off	معطّلة
 	no unused output name	لا يوجد اسم ناتج غير مستخدم
 	no output folder was chosen	لم يتم اختيار مجلد للإخراج
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	تم تنزيل {n} من ملفات PDF|تم تنزيل ملف PDF واحد ({n})|تم تنزيل ملفي PDF ({n})|تم تنزيل {n} ملفات PDF|تم تنزيل {n} ملف PDF|تم تنزيل {n} من ملفات PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	تم تحديث {n} من العمليات الحسابية لتستخدم الاسم الجديد.|عملية حسابية واحدة ({n}) تستخدم الآن الاسم الجديد.|عمليتان حسابيتان ({n}) تستخدمان الآن الاسم الجديد.|{n} عمليات حسابية تستخدم الآن الاسم الجديد.|{n} عملية حسابية تستخدم الآن الاسم الجديد.|{n} من العمليات الحسابية تستخدم الآن الاسم الجديد.
 	Scan	مسح ضوئي
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	وقّع على ورقة بيضاء والتقط لها صورة في إضاءة ساطعة ومتساوية (استخدم الفلاش). اختر الصورة أو أفلتها هنا: يعثر PdfCraft على التوقيع ويزيل الورق.
 	Choose photo…	اختيار صورة…

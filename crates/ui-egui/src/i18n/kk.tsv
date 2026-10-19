@@ -2328,6 +2328,7 @@ animation effects	Off	Өшірулі
 	no unused output name	бос шығыс атауы жоқ
 	no output folder was chosen	шығыс қалтасы таңдалмады
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF жүктелді|{n} PDF жүктелді
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} есептеу енді жаңа атауды пайдаланады.|{n} есептеу енді жаңа атауды пайдаланады.
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} өріс атауы алдыңғы файлдармен қайшы келеді және қайта аталады: {list}|{n} өріс атауы алдыңғы файлдармен қайшы келеді және қайта аталады: {list}
 	Scan	Сканерлеу
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Ақ қағаз парағына қол қойып, оны жарық әрі біркелкі жарықта суретке түсіріңіз (жарқылды қосыңыз). Суретті таңдаңыз немесе осында тастаңыз: PdfCraft қолтаңбаны тауып, қағазды алып тастайды.

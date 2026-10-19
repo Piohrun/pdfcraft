@@ -2415,6 +2415,7 @@ animation effects	Off	Vypnuto
 	no unused output name	žádný volný název výstupního souboru
 	no output folder was chosen	nebyla vybrána výstupní složka
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Stažen {n} soubor PDF|Staženy {n} soubory PDF|Staženo {n} souborů PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} výpočet nyní používá nový název.|{n} výpočty nyní používají nový název.|{n} výpočtů nyní používá nový název.
 	Scan	Skenovat
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Podepište se na bílý list papíru a vyfoťte ho při jasném, rovnoměrném světle (použijte blesk). Vyberte fotografii nebo ji sem přetáhněte: PdfCraft najde podpis a odstraní papír.
 	Choose photo…	Vybrat fotografii…

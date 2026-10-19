@@ -2598,6 +2598,7 @@ certificate	SHA-256 digest	SHA-256 santrauka
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} lauko pavadinimas sutampa su ankstesniuose failuose esančių laukų pavadinimais ir bus pervadintas: {list}|{n} laukų pavadinimai sutampa su ankstesniuose failuose esančių laukų pavadinimais ir bus pervadinti: {list}|{n} laukų pavadinimų sutampa su ankstesniuose failuose esančių laukų pavadinimais ir bus pervadinta: {list}
 @plural	{n} object selected|{n} objects selected	Pažymėtas {n} objektas|Pažymėti {n} objektai|Pažymėta {n} objektų
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Atsisiųstas {n} PDF failas|Atsisiųsti {n} PDF failai|Atsisiųsta {n} PDF failų
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} skaičiavimas dabar naudoja naują pavadinimą.|{n} skaičiavimai dabar naudoja naują pavadinimą.|{n} skaičiavimų dabar naudoja naują pavadinimą.
 key	Ctrl	Ctrl
 key	Shift	Shift
 key	Delete	Delete

@@ -56,6 +56,13 @@ delete_field(&mut doc, "email")?;
   Button1, Date1, Signature1; `/Helv` is added to `/DR`; appearances are drawn at once. Radio
   buttons joining a group become kid widgets with their own export state. Renaming changes only
   the last part of a dotted name.
+- Renaming a field renames it in every Calculate script that reads it
+  (`af::rename_in_calculation`): `AFSimple_Calculate` field lists, simplified field notation
+  (the `BVCALC` comment and its translation), and `getField` calls whose argument is the name as
+  one string literal. The rest of each script is kept as written. Names built at run time, a
+  script stream that isn't UTF-8, other events' scripts and a name another field still has are
+  left alone. `calculations_changed` compares two readings of a form to say which formulas an
+  edit rewrote.
 - `Widget::caption` reads a push button's normal label (`/MK /CA`, including indirect values).
   `FieldProps { caption: Some((widget_index, text)), ..Default::default() }` changes or clears
   that label, independently of the field name. The index is 0-based. A label-only edit redraws

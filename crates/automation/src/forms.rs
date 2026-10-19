@@ -386,11 +386,18 @@ impl Automation {
         } else {
             edits.pop().ok_or_else(|| bad("give a field name"))?
         };
+        // A rename also renames the field in the formulas that read it.
+        let before = if a.get("name").is_some() { Some(self.doc(a)?.form.clone()) } else { None };
         let mut out = self.apply(a, edit)?;
         if bulk {
             out["fields"] = json!(names);
         } else {
             out["field"] = json!(new_name);
+        }
+        if let Some(before) = before {
+            let mut updated = pdfcraft_engine::form_calculations_changed(&before, &self.doc(a)?.form);
+            updated.retain(|f| Some(f) != new_name.as_ref());
+            out["formulas_updated"] = json!(updated);
         }
         Ok(out)
     }

@@ -2254,6 +2254,7 @@ animation effects	Off	Выкл
 	no unused output name	нет свободного имени для выходного файла
 	no output folder was chosen	не выбрана папка для вывода
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Скачан {n} PDF-файл|Скачано {n} PDF-файла|Скачано {n} PDF-файлов
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} вычисление теперь использует новое имя.|{n} вычисления теперь используют новое имя.|{n} вычислений теперь используют новое имя.
 	Scan	Сканировать
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Распишитесь на листе белой бумаги и сфотографируйте его при ярком равномерном освещении (со вспышкой). Выберите фото или перетащите его сюда: PdfCraft найдёт подпись и уберёт бумагу.
 	Choose photo…	Выбрать фото…

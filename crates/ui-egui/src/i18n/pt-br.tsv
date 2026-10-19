@@ -2355,6 +2355,7 @@ animation effects	Off	Desativados
 	no unused output name	nenhum nome de saída disponível
 	no output folder was chosen	nenhuma pasta de saída foi escolhida
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF baixado|{n} PDFs baixados
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} cálculo agora usa o novo nome.|{n} cálculos agora usam o novo nome.
 	Scan	Digitalizar
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Assine uma folha de papel branco e tire uma foto dela com luz forte e uniforme (use o flash). Escolha a foto ou solte-a aqui: o PdfCraft encontra a assinatura e remove o papel.
 	Choose photo…	Escolher foto…

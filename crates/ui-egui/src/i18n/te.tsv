@@ -2242,6 +2242,7 @@ animation effects	Off	ఆఫ్
 	no unused output name	ఉపయోగించని అవుట్‌పుట్ పేరు లేదు
 	no output folder was chosen	అవుట్‌పుట్ ఫోల్డర్ ఎంచుకోలేదు
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF డౌన్‌లోడ్ చేయబడింది|{n} PDFలు డౌన్‌లోడ్ చేయబడ్డాయి
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} గణన ఇప్పుడు కొత్త పేరును ఉపయోగిస్తుంది.|{n} గణనలు ఇప్పుడు కొత్త పేరును ఉపయోగిస్తాయి.
 	Scan	స్కాన్
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	తెల్ల కాగితంపై సంతకం చేసి, ప్రకాశవంతమైన, సమానమైన వెలుతురులో దాని ఫోటో తీయండి (ఫ్లాష్ ఉపయోగించండి). ఫోటోను ఎంచుకోండి లేదా ఇక్కడ వదలండి: PdfCraft సంతకాన్ని కనుగొని కాగితాన్ని తొలగిస్తుంది.
 	Choose photo…	ఫోటో ఎంచుకోండి…

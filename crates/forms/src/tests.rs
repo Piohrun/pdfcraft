@@ -1048,6 +1048,84 @@ fn formats_validation_and_calculations_run_like_acrobat() {
     assert_eq!(field(&fields(&doc), "Price").actions.format, Format::None);
 }
 
+/// Renaming a field renames it in the calculations that read it: a sum dropped it, notation
+/// read it as 0 and a script read a field that no longer existed.
+#[test]
+fn renaming_a_field_renames_it_in_the_calculations_that_read_it() {
+    use crate::af::{CalcOp, Calculate};
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    for (i, name) in ["a", "b", "sum", "product", "script"].into_iter().enumerate() {
+        let y = 700.0 - 40.0 * i as f64;
+        add_field(&mut doc, 0, [50.0, y, 250.0, y + 20.0], &text, Some(name)).unwrap();
+    }
+    let calculate = |c: Calculate| FieldProps { calculate: Some(c), ..FieldProps::default() };
+    set_props(&mut doc, "sum", &calculate(Calculate::Simple { op: CalcOp::Sum, fields: vec!["a".into(), "b".into()] })).unwrap();
+    set_props(&mut doc, "product", &calculate(Calculate::Notation("a * b + ab".into()))).unwrap();
+    set_field_script(&mut doc, "script", "calculate", Some("event.value = getField(\"a\").value + getField(\"b\").value;")).unwrap();
+    set_props(&mut doc, "a", &FieldProps { name: Some("qty".into()), ..FieldProps::default() }).unwrap();
+    let check = |doc: &Document| {
+        let all = fields(doc);
+        assert_eq!(field(&all, "sum").actions.calculate, Calculate::Simple { op: CalcOp::Sum, fields: vec!["qty".into(), "b".into()] });
+        assert_eq!(field(&all, "product").actions.calculate, Calculate::Notation("qty * b + ab".into()));
+        let script = field(&all, "script").actions.scripts.calculate.clone();
+        assert_eq!(script.as_deref(), Some("event.value = getField(\"qty\").value + getField(\"b\").value;"));
+    };
+    check(&doc);
+    let mut doc = reopen(&doc);
+    check(&doc);
+    set_value(&mut doc, "qty", &FieldValue::Text("10".into())).unwrap();
+    set_value(&mut doc, "b", &FieldValue::Text("2".into())).unwrap();
+    let all = fields(&doc);
+    assert_eq!((field(&all, "sum").value.clone(), field(&all, "product").value.clone()), (vec!["12".to_string()], vec!["20".to_string()]));
+}
+
+/// The rename reaches a script stored as a stream, an indirect action and the only widget's
+/// actions; it leaves a script that isn't UTF-8 as it is, and a name another field still has.
+#[test]
+fn a_rename_reaches_every_stored_form_of_a_calculation() {
+    let widget = |name: &str, y: u32, rest: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /Rect [50 {y} 250 {}] /P 3 0 R {rest} >>", y + 20)
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 11 0 R 12 0 R 13 0 R 15 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R 7 0 R 11 0 R 12 0 R 13 0 R 14 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        widget("a", 700, ""),
+        widget("stream", 660, "/AA << /C 8 0 R >>"),
+        widget("bytes", 620, "/AA << /C << /S /JavaScript /JS 10 0 R >> >>"),
+        "<< /S /JavaScript /JS 9 0 R >>".into(),
+        "<< /Length 34 >>\nstream\nevent.value = getField(\"a\").value;\nendstream".into(),
+        "<< /Length 85 /Filter /ASCIIHexDecode >>\nstream\n2F2A20FF202A2F206576656E742E76616C7565203D206765744669656C6428226122292E76616C75653B>\nendstream".into(),
+        widget("dup", 580, ""),
+        widget("dup", 540, ""),
+        widget("both", 500, "/AA << /C << /S /JavaScript /JS (AFSimple_Calculate\\(\"SUM\", new Array\\(\"dup\", \"a\"\\)\\);) >> >>"),
+        "<< /FT /Tx /T (kid) /Kids [15 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 14 0 R /Rect [50 460 250 480] /P 3 0 R /AA << /C << /S /JavaScript /JS (event.value = getField\\('a'\\).value;) >> >> >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let calc = |doc: &Document, name: &str| {
+        let all = fields(doc);
+        let f = field(&all, name);
+        (f.actions.calculate.clone(), f.actions.scripts.calculate.clone().unwrap_or_default())
+    };
+    assert!(calc(&doc, "stream").1.contains("getField(\"a\")"), "{:?}", calc(&doc, "stream"));
+    set_props(&mut doc, "a", &FieldProps { name: Some("qty".into()), ..FieldProps::default() }).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(calc(&doc, "stream").1, "event.value = getField(\"qty\").value;");
+    assert_eq!(calc(&doc, "kid").1, "event.value = getField(\"qty\").value;");
+    assert!(calc(&doc, "bytes").1.contains("getField(\"a\")"), "a script that isn't UTF-8 is not written back");
+    assert_eq!(calc(&doc, "both").0, af::Calculate::Simple { op: af::CalcOp::Sum, fields: vec!["dup".into(), "qty".into()] });
+    let mut doc = doc;
+    set_props(&mut doc, "dup", &FieldProps { name: Some("dup2".into()), ..FieldProps::default() }).unwrap();
+    assert_eq!(
+        calc(&doc, "both").0,
+        af::Calculate::Simple { op: af::CalcOp::Sum, fields: vec!["dup".into(), "qty".into()] },
+        "the other dup keeps the name"
+    );
+}
+
 #[test]
 fn new_text_fields_fit_their_box() {
     // #1888: a fixed 12 pt was clipped in a short box. New text and date fields take Acrobat's

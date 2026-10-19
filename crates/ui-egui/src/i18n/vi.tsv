@@ -2588,6 +2588,7 @@ certificate	SHA-256 digest	Giá trị băm SHA-256
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} tên trường trùng với các tệp trước và sẽ được đổi tên: {list}
 @plural	{n} object selected|{n} objects selected	Đã chọn {n} đối tượng
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Đã tải xuống {n} PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} phép tính giờ dùng tên mới.
 key	Ctrl	Ctrl
 key	Shift	Shift
 key	Delete	Delete
