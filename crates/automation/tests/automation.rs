@@ -3843,6 +3843,14 @@ fn renaming_a_field_keeps_the_formulas_that_read_it() {
     let field = |name: &str| f["fields"].as_array().unwrap().iter().find(|x| x["name"] == name).cloned();
     assert!(field("c").is_some() && field("price").is_none());
     assert_eq!(field("product").unwrap()["calculate"]["notation"], "c * d", "undone together with the rename");
+    // The renamed field's own formula, changed in the same call, is not one the rename
+    // rewrote, though the name is stored trimmed.
+    let r = ok(
+        &mut a,
+        "form_set_props",
+        json!({ "doc": doc, "field": "sum", "name": " added ", "calculate": { "op": "sum", "fields": ["qty", "b", "x"] } }),
+    );
+    assert_eq!(r["formulas_updated"], json!([]));
 }
 
 #[test]
