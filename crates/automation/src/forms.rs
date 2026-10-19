@@ -395,8 +395,13 @@ impl Automation {
             out["field"] = json!(new_name);
         }
         if let Some(before) = before {
-            let mut updated = pdfcraft_engine::form_calculations_changed(&before, &self.doc(a)?.form);
-            updated.retain(|f| Some(f) != new_name.as_ref());
+            let after = &self.doc(a)?.form;
+            // The renamed field itself, found by object: the name stored can differ from the
+            // argument (trimmed, kept under its parent's prefix).
+            let own =
+                names.first().and_then(|n| before.iter().find(|f| &f.name == n)).and_then(|f| after.iter().find(|g| g.obj == f.obj)).map(|g| &g.name);
+            let mut updated = pdfcraft_engine::form_calculations_changed(&before, after);
+            updated.retain(|f| Some(f) != own);
             out["formulas_updated"] = json!(updated);
         }
         Ok(out)
