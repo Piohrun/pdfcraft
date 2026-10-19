@@ -1,5 +1,5 @@
 //! Form tools: list fields, fill them (several at once, one undo step), clear the form, and
-//! prepare a form (add, change and delete fields).
+//! prepare a form (add fields one at a time or as a table, change and delete them).
 
 use pdfcraft_engine::form_scripts::{CalcOp, Calculate, Format, Validate};
 use pdfcraft_engine::{Edit, FieldProps, FieldValue, FormField, FormFieldKind, NewField, field_flags};
@@ -336,6 +336,61 @@ impl Automation {
             .find(|n| !before.contains(n))
             .or_else(|| a.opt_str("group").ok().flatten().and_then(|g| doc.form.iter().map(|f| &f.name).find(|n| *n == g)));
         out["field"] = json!(added);
+        Ok(out)
+    }
+
+    /// A table of text fields: `rect` (points from the top-left of the displayed page) divided
+    /// into rows and columns, one field per cell, as one undo step.
+    pub(crate) fn form_add_field_table(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::field_table::{self, FieldTable, MAX_COLUMNS, TableColumn, TableError};
+        let page = self.page(a)?;
+        let rect = a
+            .get("rect")
+            .and_then(Value::as_array)
+            .and_then(|r| r.iter().map(Value::as_f64).collect::<Option<Vec<f64>>>())
+            .and_then(|r| <[f64; 4]>::try_from(r).ok())
+            .ok_or_else(|| bad("rect must be 4 numbers"))?;
+        let names = a.get("names").map(|_| a.strs("names")).transpose()?;
+        let widths = match a.get("widths") {
+            None => None,
+            Some(v) => Some(
+                v.as_array()
+                    .and_then(|w| w.iter().map(Value::as_f64).collect::<Option<Vec<f64>>>())
+                    .ok_or_else(|| bad("widths must be an array of numbers"))?,
+            ),
+        };
+        // A negative count is no count: the table refuses it with its own words.
+        let counts = [a.opt_int("columns")?.map(|n| usize::try_from(n).unwrap_or(0)), names.as_ref().map(Vec::len), widths.as_ref().map(Vec::len)];
+        let mut given = counts.into_iter().flatten();
+        let columns = given.next().unwrap_or(1);
+        if given.any(|n| n != columns) {
+            return Err(bad("columns, names and widths must agree on the number of columns"));
+        }
+        // Before anything is sized by it.
+        if !(1..=MAX_COLUMNS).contains(&columns) {
+            return Err(bad(TableError::Columns.to_string()));
+        }
+        let (edit, fields) = {
+            let doc = self.doc(a)?;
+            let base = field_table::free_base(doc.form.iter().map(|f| f.name.as_str()));
+            let mut table = FieldTable::new(rect, &base);
+            table.rows = usize::try_from(a.int("rows")?).unwrap_or(0);
+            table.columns = (0..columns)
+                .map(|c| TableColumn {
+                    pattern: names.as_ref().and_then(|n| n.get(c)).map_or_else(|| field_table::column_pattern(&base, c + 1), |p| (*p).to_owned()),
+                    width: widths.as_ref().and_then(|w| w.get(c)).copied().unwrap_or(1.0),
+                })
+                .collect();
+            table.row_gap = a.opt_num("row_gap")?.unwrap_or(0.0);
+            table.column_gap = a.opt_num("column_gap")?.unwrap_or(0.0);
+            table.first_row = a.opt_int("first_row")?.map_or(1, |n| usize::try_from(n).unwrap_or(usize::MAX));
+            let info = doc.info.pages.get(page).ok_or_else(|| bad(format!("page {} does not exist", page + 1)))?;
+            let edit = field_table::edit(&table, page, info, &doc.form).map_err(|e| bad(e.to_string()))?;
+            let fields: Vec<String> = table.cells().map_err(|e| bad(e.to_string()))?.into_iter().map(|c| c.name).collect();
+            (edit, fields)
+        };
+        let mut out = self.apply(a, edit)?;
+        out["fields"] = json!(fields);
         Ok(out)
     }
 

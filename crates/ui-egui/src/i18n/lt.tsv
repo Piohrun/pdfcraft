@@ -2693,3 +2693,27 @@ theme	Appearance	Išvaizda
 	Paragraph spacing	Tarpas tarp pastraipų
 	Less	Mažiau
 	Other options	Kitos parinktys
+
+# Prepare a form ▸ Text field table
+	Add text field table	Pridėti teksto laukų lentelę
+	Text field table	Teksto laukų lentelė
+	Text Field Table	Teksto laukų lentelė
+	Columns	Stulpeliai
+	Row spacing	Tarpas tarp eilučių
+	Column spacing	Tarpas tarp stulpelių
+	First row number	Pirmosios eilutės numeris
+	Column widths	Stulpelių pločiai
+	Distribute evenly	Paskirstyti tolygiai
+	Field names	Laukų pavadinimai
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N arba {row} – eilutės numeris, {col} – stulpelio numeris, {seq} – langelio numeris. Jei nė vieno nėra, eilutės numeris pridedamas gale.
+	Column {n}	Stulpelis {n}
+	Add fields	Pridėti laukus
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	eilutės per žemos: padidinkite srities aukštį arba naudokite mažiau eilučių ar mažesnį tarpą tarp jų
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	stulpelis per siauras: praplatinkite sritį, skirkite stulpeliui daugiau pločio arba naudokite mažiau stulpelių ar mažesnį tarpą tarp jų
+	field names can't contain a period: {name}	laukų pavadinimuose negali būti taško: {name}
+	two cells would both be named {name}	du langeliai būtų pavadinti {name}
+	a field named {name} already exists	laukas pavadinimu {name} jau yra
+	a table has 1 to {max} rows	lentelėje gali būti nuo 1 iki {max} eilučių
+	a table has 1 to {max} columns	lentelėje gali būti nuo 1 iki {max} stulpelių
+	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0

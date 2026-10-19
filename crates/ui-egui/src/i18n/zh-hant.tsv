@@ -2393,3 +2393,23 @@ animation effects	Off	關
 	Paragraph spacing	段落間距
 	Less	收起
 	Other options	其他選項
+
+# Prepare a form ▸ Text field table
+	Add text field table	新增文字欄位表格
+	Text field table	文字欄位表格
+	Text Field Table	文字欄位表格
+	Columns	欄
+	Row spacing	列間距
+	Column spacing	欄間距
+	First row number	起始列號
+	Column widths	欄寬
+	Distribute evenly	平均分配
+	Field names	欄位名稱
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N 或 {row} 代表列號，{col} 代表欄號，{seq} 代表儲存格序號。若都沒有，列號會加在結尾。
+	Column {n}	第 {n} 欄
+	Add fields	新增欄位
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	列太矮：請加高區域，或減少列數或列間距
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	某欄太窄：請加寬區域、給該欄更多寬度，或減少欄數或欄間距
+	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
+	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
+	a field named {name} already exists	已有名為 {name} 的欄位

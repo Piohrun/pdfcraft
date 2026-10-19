@@ -2,9 +2,11 @@
 //! Field Properties and deleting.
 
 use egui::Pos2;
+use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
+use egui_kittest::kittest::{Queryable, by};
+use pdfcraft_engine::field_table::TableColumn;
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool};
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
@@ -615,4 +617,152 @@ fn actions_tab_adds_and_removes_actions() {
             (FieldTrigger::OnBlur, FieldAction::Uri("https://example.org".into()))
         ]
     );
+}
+
+/// Text field table: pick the tool and drag out an area in the empty lower part of page 1, 200 by
+/// 120 points from (40, 240) as displayed. The table's window opens for it.
+fn draw_table(h: &mut Harness<'static, PdfCraftApp>) {
+    assert!(h.state_mut().execute("form.add.text_table"));
+    h.run_steps(2);
+    let (a, b) = (at(h, 40.0, 240.0), at(h, 240.0, 360.0));
+    drag(h, a, b);
+    assert_eq!(h.state().dialog, Some(Dialog::FieldTable));
+}
+
+fn columns(patterns: &[(&str, f64)]) -> Vec<TableColumn> {
+    patterns.iter().map(|(p, w)| TableColumn { pattern: (*p).to_owned(), width: *w }).collect()
+}
+
+#[test]
+fn a_text_field_table_is_drawn_set_up_and_added_in_one_step() {
+    let mut h = harness();
+    let before = names(&h);
+    draw_table(&mut h);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "back to Select once the area is drawn");
+    {
+        let s = h.state_mut();
+        let id = s.views[0].id;
+        let d = s.field_table_draft.as_mut().expect("the table's window is open");
+        assert_eq!((d.doc, d.page), (id, 0));
+        let r = d.table.rect;
+        assert!([40.0, 240.0, 240.0, 360.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "drawn as displayed: {r:?}");
+        d.table.rows = 2;
+        d.table.columns = columns(&[("desc_N", 3.0), ("price_N", 1.0)]);
+    }
+    h.run_steps(2);
+    h.get_by_label("Add fields").click();
+    h.run_steps(3);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false), "added, the window closes");
+    let added: Vec<_> = names(&h).into_iter().filter(|n| !before.contains(n)).collect();
+    assert_eq!(added, ["desc_1", "price_1", "desc_2", "price_2"]);
+    // 150 and 50 points wide, 60 high, the first row at the top: user space has y up from 400.
+    let r = rect_of(&h, "desc_1");
+    assert!([40.0, 100.0, 190.0, 160.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "{r:?}");
+    let r = rect_of(&h, "price_2");
+    assert!([190.0, 40.0, 240.0, 100.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "{r:?}");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Add text field table"));
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(names(&h), before, "one undo takes the whole table back");
+}
+
+#[test]
+fn a_table_whose_names_are_taken_stays_open_saying_so() {
+    let mut h = harness();
+    draw_table(&mut h);
+    h.get_by_label("Add fields").click();
+    h.run_steps(3);
+    assert!(names(&h).contains(&"Table1_4".to_owned()), "{:?}", names(&h));
+    // The next table takes the next free names on its own.
+    draw_table(&mut h);
+    assert_eq!(h.state().field_table_draft.as_ref().unwrap().table.columns[0].pattern, "Table2_N");
+    // Named like the first, it can't be added: the window says why and keeps what was set up.
+    h.state_mut().field_table_draft.as_mut().unwrap().table.columns[0].pattern = "Table1_N".into();
+    h.run_steps(2);
+    let count = names(&h).len();
+    h.get_by_label("a field named \"Table1_1\" already exists");
+    h.get_by_label("Add fields").click();
+    h.run_steps(3);
+    assert_eq!(names(&h).len(), count, "nothing added");
+    assert_eq!(h.state().dialog, Some(Dialog::FieldTable), "still open");
+    // Escape closes it, adding nothing.
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some(), names(&h).len()), (None, false, count));
+}
+
+/// Enter commits a number being typed. It used to add the table there and then, before the rest
+/// of it was set up.
+#[test]
+fn enter_in_a_number_field_does_not_add_the_table() {
+    let mut h = harness();
+    let before = names(&h).len();
+    draw_table(&mut h);
+    let rows = h.query_all(by().role(Role::SpinButton)).next().map(|n| n.rect()).expect("the Rows field");
+    h.hover_at(rows.center());
+    h.drag_at(rows.center());
+    h.run_steps(1);
+    h.drop_at(rows.center());
+    h.run_steps(2);
+    h.key_press(egui::Key::Backspace);
+    h.event(egui::Event::Text("6".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(names(&h).len(), before, "nothing added");
+    assert_eq!(h.state().field_table_draft.as_ref().map(|d| d.table.rows), Some(6), "the number is in, the window open");
+}
+
+/// With 26 or more columns each pair of columns has less than twice the least share a divider
+/// keeps, and dragging one panicked in `f64::clamp`.
+#[test]
+fn dragging_a_column_divider_between_many_columns() {
+    let mut h = harness();
+    draw_table(&mut h);
+    h.state_mut().field_table_draft.as_mut().unwrap().table.columns = columns(&[("c{c}_N", 1.0); 30]);
+    h.run_steps(2);
+    let (above, below) = (h.get_by_label("Distribute evenly").rect(), h.get_by_label("Field names").rect());
+    let p = egui::pos2(above.center().x - 120.0, (above.bottom() + below.top()) / 2.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    for dx in [-10.0, -20.0] {
+        h.hover_at(p + egui::vec2(dx, 0.0));
+        h.run_steps(1);
+    }
+    h.drop_at(p + egui::vec2(-20.0, 0.0));
+    h.run_steps(2);
+    let widths: Vec<f64> = h.state().field_table_draft.as_ref().unwrap().table.columns.iter().map(|c| c.width).collect();
+    assert!(widths.iter().any(|w| (w - 1.0).abs() > 1e-9), "a divider moved: {widths:?}");
+    assert!((widths.iter().sum::<f64>() - 30.0).abs() < 1e-9 && widths.iter().all(|w| *w > 0.0), "{widths:?}");
+}
+
+#[test]
+fn the_table_window_closes_when_its_document_is_left() {
+    let mut h = harness();
+    let blank = pdfcraft_engine::Session::new().create_blank(300.0, 400.0, 1).unwrap().to_vec();
+    h.state_mut().open_bytes("other.pdf", None, blank).unwrap();
+    h.state_mut().active = Some(0);
+    h.run_steps(4);
+    let before = names(&h).len();
+    draw_table(&mut h);
+    // The other document's tab is still in reach of the pointer: choosing it closes the window.
+    let tab = h.get_all_by_label("other.pdf").next().map(|n| n.rect()).expect("its tab");
+    h.hover_at(tab.center());
+    h.run_steps(1);
+    h.drag_at(tab.center());
+    h.run_steps(1);
+    h.drop_at(tab.center());
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(1));
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false));
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    assert_eq!(names(&h).len(), before, "nothing added to either document");
+    // So does leaving Prepare a form.
+    draw_table(&mut h);
+    h.state_mut().left_open = false;
+    h.run_steps(2);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false));
 }

@@ -726,6 +726,7 @@ impl Automation {
             }
             "form_reset" => self.form_reset(&a)?,
             "form_add_field" => self.form_add_field(&a)?,
+            "form_add_field_table" => self.form_add_field_table(&a)?,
             "form_set_props" => self.form_set_props(&a)?,
             "form_delete_field" => self.form_delete_field(&a)?,
             "form_tab_order" => self.form_tab_order(&a)?,

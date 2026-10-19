@@ -2719,3 +2719,23 @@ certificate	Version	الإصدار
 	Paragraph spacing	تباعد الفقرات
 	Less	أقل
 	Other options	خيارات أخرى
+
+# Prepare a form ▸ Text field table
+	Add text field table	إضافة جدول حقول نصية
+	Text field table	جدول حقول نصية
+	Text Field Table	جدول حقول نصية
+	Columns	الأعمدة
+	Row spacing	المسافة بين الصفوف
+	Column spacing	المسافة بين الأعمدة
+	First row number	رقم الصف الأول
+	Column widths	عروض الأعمدة
+	Distribute evenly	توزيع بالتساوي
+	Field names	أسماء الحقول
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N أو {row} هو رقم الصف، و{col} رقم العمود، و{seq} رقم الخلية. إذا لم يوجد أي منها، يُضاف رقم الصف في النهاية.
+	Column {n}	العمود {n}
+	Add fields	إضافة الحقول
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	الصفوف قصيرة جدًا: اجعل المنطقة أطول، أو استخدم صفوفًا أقل أو مسافة أقل بين الصفوف
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	أحد الأعمدة ضيق جدًا: اجعل المنطقة أعرض، أو امنح العمود عرضًا أكبر، أو استخدم أعمدة أقل أو مسافة أقل بين الأعمدة
+	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
+	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
+	a field named {name} already exists	يوجد حقل باسم {name} بالفعل

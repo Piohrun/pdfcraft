@@ -5025,11 +5025,16 @@ title = "Create multiple copies of a field in a grid"
 area = "F"
 tier = "P2"
 milestone = "M6"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["form.add.text_table"]
+tools = ["form_add_field_table"]
+evidence = [
+  "crates/forms/src/table.rs::a_grid_fills_its_area_with_gaps_between_the_cells",
+  "crates/engine/src/field_table.rs::a_table_is_added_and_undone_as_one_step",
+  "crates/automation/tests/automation.rs::adding_a_field_table_through_tools",
+  "crates/ui-egui/tests/prepare.rs::a_text_field_table_is_drawn_set_up_and_added_in_one_step",
+]
+notes = "Prepare a form ▸ Text field table: drag an area, then set rows, columns, spacing, column widths (draggable dividers) and a name pattern per column in a movable window, with the table previewed on the page. Added as one undoable edit, or refused whole with the reason (a cell under 4 pt, a name with a period, a repeated or existing name); form_add_field_table does the same headlessly. Missing: copying an existing field of any type, with its properties, into a grid from its context menu, which is what this entry describes; the table only creates new text fields."
 
 [[feature]]
 id = "form.rename-lock-fields"

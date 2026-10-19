@@ -2457,3 +2457,23 @@ animation effects	Off	Desativados
 	Paragraph spacing	Espaçamento entre parágrafos
 	Less	Menos
 	Other options	Outras opções
+
+# Prepare a form ▸ Text field table
+	Add text field table	Adicionar tabela de campos de texto
+	Text field table	Tabela de campos de texto
+	Text Field Table	Tabela de campos de texto
+	Columns	Colunas
+	Row spacing	Espaçamento entre linhas
+	Column spacing	Espaçamento entre colunas
+	First row number	Número da primeira linha
+	Column widths	Larguras das colunas
+	Distribute evenly	Distribuir igualmente
+	Field names	Nomes dos campos
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N ou {row} é o número da linha, {col} o da coluna e {seq} o da célula. Sem nenhum deles, o número da linha vai no final.
+	Column {n}	Coluna {n}
+	Add fields	Adicionar campos
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	as linhas estão baixas demais: deixe a área mais alta ou use menos linhas ou menos espaçamento entre linhas
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	uma coluna está estreita demais: deixe a área mais larga, dê mais largura à coluna ou use menos colunas ou menos espaçamento entre colunas
+	field names can't contain a period: {name}	nomes de campo não podem conter ponto: {name}
+	two cells would both be named {name}	duas células teriam o nome {name}
+	a field named {name} already exists	já existe um campo chamado {name}

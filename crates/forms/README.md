@@ -25,6 +25,14 @@ set_props(&mut doc, "email", &FieldProps {
     ..Default::default()
 })?;
 delete_field(&mut doc, "email")?;
+
+// A table of text fields (view space, y down), laid out and named before any of it is added:
+// refused whole for a cell under MIN_FIELD_SIDE or a name with a period, repeated or taken.
+let names = all.iter().map(|f| f.name.as_str());
+let base = table::free_base(names.clone());                    // "Table1", or the next one free
+let mut grid = table::FieldTable::new([40.0, 240.0, 240.0, 360.0], &base);
+grid.set_columns(2, &base);
+let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table1_c2_1", …
 ```
 
 ## Behaviour

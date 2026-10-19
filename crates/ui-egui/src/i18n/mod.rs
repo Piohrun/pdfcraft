@@ -1290,7 +1290,7 @@ mod tests {
     /// Spanish says everything the layers below word for themselves: what the accessibility
     /// checker finds and what its saved report calls things, what the PDF/A verifier reports, what
     /// a signature's details say and the changes they name, what can be wrong with the pages to
-    /// print, and what an edit is called in the history.
+    /// print or with a table of text fields, and what an edit is called in the history.
     ///
     /// These lists are the whole point of the engine handing the wording over apart from the
     /// document's own words: a catalog that covers them says those sentences in its own language.
@@ -1298,7 +1298,7 @@ mod tests {
     #[test]
     fn spanish_covers_what_the_engine_says() {
         let es = Lang::from_code("es").expect("es registered");
-        let lists: [(&str, &[&str]); 8] = [
+        let lists: [(&str, &[&str]); 9] = [
             ("accessibility finding", pdfcraft_engine::a11y::WORDINGS),
             ("accessibility report", pdfcraft_engine::a11y::REPORT_WORDS),
             ("PDF/A problem", pdfcraft_engine::pdfa::WORDINGS),
@@ -1307,6 +1307,7 @@ mod tests {
             ("pages to print", pdfcraft_engine::print::WORDINGS),
             ("edit label", pdfcraft_engine::EDIT_LABELS),
             ("batch label", pdfcraft_engine::BATCH_LABELS),
+            ("text field table mistake", pdfcraft_engine::field_table::WORDINGS),
         ];
         for (what, list) in lists {
             assert!(!list.is_empty(), "no {what} wordings to cover");
@@ -1322,11 +1323,12 @@ mod tests {
     #[test]
     fn spanish_keeps_the_holes_in_what_the_engine_says() {
         let es = Lang::from_code("es").expect("es registered");
-        let lists: [&[&str]; 4] = [
+        let lists: [&[&str]; 5] = [
             pdfcraft_engine::a11y::WORDINGS,
             pdfcraft_engine::pdfa::WORDINGS,
             pdfcraft_engine::sign::pdf::WORDINGS,
             pdfcraft_engine::print::WORDINGS,
+            pdfcraft_engine::field_table::WORDINGS,
         ];
         for wording in lists.into_iter().flatten() {
             let said = tr(es, wording);

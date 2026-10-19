@@ -3391,6 +3391,59 @@ fn rotating_a_field_through_tools() {
     assert_eq!((rot, back), (0, before));
 }
 
+/// A table of text fields through the tool: laid out from the top of the page as displayed, named
+/// column by column, one undo step, and refused whole, with the reason, when any of it can't go in.
+#[test]
+fn adding_a_field_table_through_tools() {
+    let dir = workdir("field-table");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let table =
+        json!({ "doc": doc, "page": 1, "rect": [20, 20, 220, 120], "rows": 2, "names": ["desc_N", "price_N"], "widths": [3, 1], "row_gap": 10 });
+    assert_eq!(ok(&mut a, "form_add_field_table", table.clone())["fields"], json!(["desc_1", "price_1", "desc_2", "price_2"]));
+    let rects = |a: &mut Automation| {
+        let fields = ok(a, "form_fields", json!({ "doc": doc }))["fields"].as_array().unwrap().clone();
+        fields.iter().map(|f| (f["name"].as_str().unwrap().to_owned(), f["rect"].clone())).collect::<Vec<_>>()
+    };
+    // 150 and 50 points wide, (100 - 10) / 2 = 45 high, the first row at the top.
+    let near = |v: &Value, want: [f64; 4]| v.as_array().unwrap().iter().zip(want).all(|(g, w)| (g.as_f64().unwrap() - w).abs() < 0.01);
+    let got = rects(&mut a);
+    for (name, want) in [
+        ("desc_1", [20.0, 20.0, 170.0, 65.0]),
+        ("price_1", [170.0, 20.0, 220.0, 65.0]),
+        ("desc_2", [20.0, 75.0, 170.0, 120.0]),
+        ("price_2", [170.0, 75.0, 220.0, 120.0]),
+    ] {
+        let rect = got.iter().find(|(n, _)| n == name).map(|(_, r)| r).unwrap();
+        assert!(near(rect, want), "{name}: {rect} != {want:?}");
+    }
+    // Without names, each table takes the first free base.
+    let plain = json!({ "doc": doc, "page": 2, "rect": [20, 20, 220, 120], "rows": 2 });
+    assert_eq!(ok(&mut a, "form_add_field_table", plain.clone())["fields"], json!(["Table1_1", "Table1_2"]));
+    assert_eq!(ok(&mut a, "form_add_field_table", plain)["fields"], json!(["Table2_1", "Table2_2"]));
+    let count = |a: &mut Automation| ok(a, "form_fields", json!({ "doc": doc }))["fields"].as_array().unwrap().len();
+    assert_eq!(count(&mut a), 8);
+    // Refused whole, saying why: nothing is added.
+    let refused = |a: &mut Automation, args: Value| match a.call("form_add_field_table", &args) {
+        Err(ToolError::InvalidArgs(m)) => m,
+        other => panic!("refused, not {other:?}"),
+    };
+    assert_eq!(refused(&mut a, table), "a field named \"desc_1\" already exists");
+    let small = json!({ "doc": doc, "page": 1, "rect": [20, 200, 220, 300], "rows": 30 });
+    assert!(refused(&mut a, small).starts_with("the rows are too short"));
+    let dotted = json!({ "doc": doc, "page": 1, "rect": [20, 200, 220, 300], "rows": 2, "names": ["a.{n}"] });
+    assert_eq!(refused(&mut a, dotted), "field names can't contain a period: \"a.1\"");
+    let disagree = json!({ "doc": doc, "page": 1, "rect": [20, 200, 220, 300], "rows": 2, "columns": 3, "names": ["a_N", "b_N"] });
+    assert!(refused(&mut a, disagree).contains("must agree"));
+    let wide = json!({ "doc": doc, "page": 1, "rect": [20, 200, 220, 300], "rows": 2, "columns": 51 });
+    assert_eq!(refused(&mut a, wide), "a table has 1 to 50 columns");
+    let none = json!({ "doc": doc, "page": 1, "rect": [20, 200, 220, 300], "rows": -1 });
+    assert_eq!(refused(&mut a, none), "a table has 1 to 100 rows");
+    assert_eq!(count(&mut a), 8);
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Add text field table");
+    assert_eq!(count(&mut a), 6, "one undo takes back the whole last table");
+}
+
 #[test]
 fn redacting_through_tools() {
     let dir = workdir("redact");

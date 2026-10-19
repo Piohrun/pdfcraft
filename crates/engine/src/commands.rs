@@ -292,6 +292,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("redact.sanitize", "Sanitize document…", None, None, Modification, "sparkles"),
     c("form.field.properties", "Field properties…", None, None, HasFields, "settings-2"),
     c("form.add.text", "Add a text field", None, None, Modification, "text-cursor-input"),
+    c("form.add.text_table", "Add text field table", None, None, Modification, "grid-3x3"),
     c("form.add.checkbox", "Add a checkbox", None, None, Modification, "check-circle-2"),
     c("form.add.radio", "Add a radio button", None, None, Modification, "circle"),
     c("form.add.combo", "Add a drop-down list", None, None, Modification, "chevron-down"),
