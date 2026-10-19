@@ -23,13 +23,16 @@ pub fn edit(table: &FieldTable, page: usize, info: &PageInfo, form: &[FormField]
     for cell in cells {
         let [x0, y0, x1, y1] = cell.rect;
         let rect = info.view_rect_to_user([x0 as f32, y0 as f32, x1 as f32, y1 as f32]).map(f64::from);
+        // A corner past `f32`'s range comes back infinite.
+        if !rect.iter().all(|v| v.is_finite()) {
+            return Err(TableError::Numbers);
+        }
         // `add_field`'s own test, after the page's scale (`/UserUnit`) and rounding to `f32`.
         let (across, down) = if sideways { (rect[3] - rect[1], rect[2] - rect[0]) } else { (rect[2] - rect[0], rect[3] - rect[1]) };
-        // A corner past `f32`'s range comes back infinite, and the side not a number.
-        if down.is_nan() || down < MIN_FIELD_SIDE {
+        if down < MIN_FIELD_SIDE {
             return Err(TableError::RowsTooShort);
         }
-        if across.is_nan() || across < MIN_FIELD_SIDE {
+        if across < MIN_FIELD_SIDE {
             return Err(TableError::ColumnTooNarrow);
         }
         edits.push(Edit::AddField { page, rect, kind: NewField::Text { multiline: false }, name: Some(cell.name) });
@@ -111,5 +114,18 @@ mod tests {
         assert_eq!(edit(&narrow, 0, &unturned, &[]).err(), Some(TableError::RowsTooShort));
         let roomy = page(100.0, 100.0, [0.0, 0.0, 100.0, 100.0], 90);
         assert!(edit(&narrow, 0, &roomy, &[]).is_ok());
+    }
+
+    /// A corner finite as an `f64` but past `f32`'s range lays out, then comes back from the page's
+    /// `f32` mapping infinite: one such corner leaves a side infinite, not NaN, and the cell used to
+    /// pass, for `add_field` to refuse it once the edit was applied.
+    #[test]
+    fn a_table_past_the_pages_number_range_is_refused_before_anything_is_added() {
+        let huge = grid([0.0, 0.0, 1e39, 100.0], 2, &["a_N"]);
+        assert!(huge.cells().is_ok(), "finite as laid out");
+        for rotation in [0, 90] {
+            let info = page(300.0, 400.0, [0.0, 0.0, 300.0, 400.0], rotation);
+            assert_eq!(edit(&huge, 0, &info, &[]).err(), Some(TableError::Numbers), "/Rotate {rotation}");
+        }
     }
 }

@@ -3439,9 +3439,15 @@ fn adding_a_field_table_through_tools() {
     assert_eq!(refused(&mut a, wide), "a table has 1 to 50 columns");
     let none = json!({ "doc": doc, "page": 1, "rect": [20, 200, 220, 300], "rows": -1 });
     assert_eq!(refused(&mut a, none), "a table has 1 to 100 rows");
+    let huge = json!({ "doc": doc, "page": 1, "rect": [20, 200, 1e39, 300], "rows": 2 });
+    assert!(refused(&mut a, huge).starts_with("the area, the spacing and the column widths must be numbers"));
     assert_eq!(count(&mut a), 8);
+    // The table tool's command runs it too.
+    let by_command = json!({ "id": "form.add.text_table", "params": { "doc": doc, "page": 3, "rect": [20, 20, 220, 120], "rows": 2 } });
+    assert_eq!(ok(&mut a, "command_run", by_command)["fields"], json!(["Table3_1", "Table3_2"]));
+    assert_eq!(count(&mut a), 10);
     assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Add text field table");
-    assert_eq!(count(&mut a), 6, "one undo takes back the whole last table");
+    assert_eq!(count(&mut a), 8, "one undo takes back the whole last table");
 }
 
 #[test]

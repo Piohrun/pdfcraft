@@ -52,6 +52,7 @@ impl FieldTableDraft {
         FieldTableDraft { doc, page, table: FieldTable::new(rect, &base), base }
     }
 
+    /// What the page shows of this table this frame: worked out once, then painted on its page.
     pub(crate) fn preview(&self) -> Preview {
         Preview { page: self.page, rect: self.table.rect, cells: self.table.cells() }
     }
@@ -85,6 +86,7 @@ impl FieldTableDraft {
         }
     }
 
+    /// Give every column the same width: their widths are shares, so the same number does it.
     fn distribute_evenly(&mut self) {
         for c in &mut self.table.columns {
             c.width = 1.0;
@@ -144,6 +146,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
 }
 
+/// Drop the table being set up, and the dialog with it if it is still the open one.
 fn close(app: &mut PdfCraftApp) {
     app.field_table_draft = None;
     if app.dialog == Some(Dialog::FieldTable) {
