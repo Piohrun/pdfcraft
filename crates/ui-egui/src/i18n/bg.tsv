@@ -191,6 +191,36 @@
 	Could not save: {e}	Неуспешно записване: {e}
 	Earlier in tab order	По-напред в реда на табулация
 	Later in tab order	По-назад в реда на табулация
+	Calculation order	Ред на изчисляване
+	Fix order	Поправяне на реда
+	Move only what must move, so every field calculates after the fields it reads.	Премества само това, което трябва, така че всяко поле да се изчислява след полетата, които чете.
+	Earlier in calculation order	По-напред в реда на изчисляване
+	Later in calculation order	По-назад в реда на изчисляване
+	Too early	Твърде рано
+	Reads {name}, which calculates later, so it shows an old value.	Чете {name}, което се изчислява по-късно, затова показва стара стойност.
+	Loop	Цикъл
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Чете {names}, които на свой ред го четат. Никой ред не може да поправи цикъл: променете една от формулите.
+	Not in order	Извън реда
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Липсва в реда на изчисляване, записан в PDF файла: други програми за PDF може да не го изчисляват.
+	Back to Prepare a form	Назад към „Подготви формуляр“
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Все още нито едно поле в този формуляр не изчислява стойността си. Задайте изчисление на поле в раздела „Изчисляване“ на свойствата му и то ще се покаже тук.
+	{names} and {last}	{names} и {last}
+	{field} reads no other field	{field} не чете друго поле
+	{field} reads {fields}	{field} чете {fields}
+	No field reads it	Никое поле не го чете
+	The order saved in the PDF needs tidying	Редът, запазен в PDF файла, има нужда от подреждане
+	Moves only what must move	Премества само каквото трябва
+	Every field calculates after the fields it reads.	Всяко поле се изчислява след полетата, които чете.
+	Every field outside a loop calculates after the fields it reads.	Всяко поле извън цикъл се изчислява след полетата, които чете.
+	{field} reads its own value	{field} чете собствената си стойност
+	{fields} read each other	{fields} се четат взаимно
+	No order can fix a loop. Change one of the formulas.	Никой ред не може да поправи цикъл. Променете някоя от формулите.
+	Edit {field}'s formula	Редактиране на формулата на {field}
+	Order · top calculates first	Ред · горното се изчислява първо
+	Script	Скрипт
+	Links on page	Връзки на страницата
+	Show on the page which fields each field reads	Показване на страницата кои полета чете всяко поле
+	Drag a field to move it, or select it and press {up} or {down}.	Плъзнете поле, за да го преместите, или го изберете и натиснете {up} или {down}.
 	From:	От:
 	To:	До:
 	High Resolution	Висока резолюция
@@ -2306,6 +2336,12 @@ animation effects	Off	Изключени
 	no output folder was chosen	не е избрана папка за изхода
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Изтеглен е {n} PDF|Изтеглени са {n} PDF файла
 @plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} изчисление вече използва новото име.|{n} изчисления вече използват новото име.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Редът на изчисляване има {n} запис, който не изчислява нищо. „Поправяне на реда“ го премахва.|Редът на изчисляване има {n} записа, които не изчисляват нищо. „Поправяне на реда“ ги премахва.
+@plural	{fields} reads it|{fields} read it	{fields} го чете|{fields} го четат
+@plural	{n} field shows an old value|{n} fields show old values	{n} поле показва стара стойност|{n} полета показват стари стойности
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} се изчислява преди {fields}, което чете.|{field} се изчислява преди {fields}, които чете.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Още {n} поле се изчислява твърде рано.|Още {n} полета се изчисляват твърде рано.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} липсва в реда, запазен в PDF файла, затова други програми за PDF може да не го изчислят.|{fields} липсват в реда, запазен в PDF файла, затова други програми за PDF може да не ги изчислят.
 	Scan	Сканиране
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Подпишете се на лист бяла хартия и го снимайте на ярка, равномерна светлина (със светкавица). Изберете снимката или я пуснете тук: PdfCraft открива подписа и премахва хартията.
 	Choose photo…	Избор на снимка…

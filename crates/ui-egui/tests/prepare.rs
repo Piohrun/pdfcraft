@@ -655,3 +655,157 @@ fn actions_tab_adds_and_removes_actions() {
         ]
     );
 }
+
+/// Prepare a form ▸ Calculation order opens as a page of its own, with the form still being
+/// prepared, says when nothing calculates, and Back returns to Prepare a form.
+#[test]
+fn the_calculation_order_is_a_page_of_prepare_a_form() {
+    use pdfcraft_ui_egui::LeftPanel;
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    assert!(h.query_by_label("Field list").is_some());
+    h.get_by_label("Calculation order").click();
+    h.run_steps(3);
+    assert_eq!(h.state().left, LeftPanel::CalculationOrder);
+    assert!(h.state().is_preparing(), "the fields stay editable, so a row can select one");
+    // The page replaces the Prepare a form tools.
+    assert!(h.query_by_label("Field list").is_none());
+    assert!(h.query_by_label_contains("No field in this form calculates its value yet").is_some());
+    h.get_by_label("Back to Prepare a form").click();
+    h.run_steps(3);
+    assert_eq!(h.state().left, LeftPanel::Tool("form"));
+    assert!(h.query_by_label("Field list").is_some());
+    assert!(h.query_by_label("Back to Prepare a form").is_none());
+    // Opened from Preview, the page edits the fields again.
+    h.get_by_label("Preview").click();
+    h.run_steps(3);
+    assert!(h.state().form_preview);
+    h.get_by_label("Calculation order").click();
+    h.run_steps(3);
+    assert!(h.state().is_preparing() && !h.state().form_preview, "Preview ends, so a row can select its field");
+    // Opened (from ⌘K) while the page grid shows, the grid closes and the page shows.
+    h.state_mut().execute("page.organize");
+    h.run_steps(3);
+    assert!(h.state().views[0].organize);
+    h.state_mut().execute("form.calculation_order");
+    h.run_steps(3);
+    assert!(!h.state().views[0].organize);
+    assert!(h.query_by_label_contains("No field in this form calculates its value yet").is_some());
+}
+
+/// Prepare a form ▸ Calculation order: a card says which field shows an old value and why, each
+/// row shows its field's value as the field does, the selected field's arrows, Alt+↑ and a drag
+/// move it, Fix order puts each field after the fields it reads and the card's Undo takes that
+/// back, every change is one undo step, and a row selects its field.
+#[test]
+fn the_calculation_order_is_moved_dragged_and_fixed() {
+    use egui::{Key, Modifiers};
+    use pdfcraft_engine::form_scripts::{CalcOp, Calculate, Format};
+    use pdfcraft_engine::{Edit, FieldProps, FieldValue, NewField};
+    let mut h = harness();
+    for (i, name) in ["qty", "sub", "total", "other"].into_iter().enumerate() {
+        let y = 200.0 + 30.0 * i as f64;
+        let kind = NewField::Text { multiline: false };
+        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
+    }
+    let calculate = |name: &str, c: Calculate| Edit::SetFieldProps {
+        name: name.into(),
+        props: Box::new(FieldProps { calculate: Some(c), ..Default::default() }),
+    };
+    // Defined backwards: total, which reads sub, calculates first.
+    h.state_mut().apply_edit(calculate("total", Calculate::Simple { op: CalcOp::Sum, fields: vec!["sub".into()] }));
+    h.state_mut().apply_edit(calculate("sub", Calculate::Notation("qty * 2".into())));
+    h.state_mut().apply_edit(calculate("other", Calculate::Notation("qty + 1".into())));
+    // other shows its value as currency.
+    let currency = Format::Number { decimals: 2, sep: 0, neg: 0, currency: "$".into(), prepend: true };
+    h.state_mut()
+        .apply_edit(Edit::SetFieldProps { name: "other".into(), props: Box::new(FieldProps { format: Some(currency), ..Default::default() }) });
+    h.state_mut().apply_edit(Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("3".into()) });
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    h.get_by_label("Calculation order").click();
+    h.run_steps(3);
+    let order = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().calculation_order().fields.into_iter().map(|f| f.name).collect()
+    };
+    let undo_label = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_owned);
+    assert_eq!(order(&h), ["total", "sub", "other"]);
+    // The card says what is wrong, and each row shows its value as the field does: total
+    // calculated before sub, so it still has sub's old value.
+    assert!(h.query_by_label("1 field shows an old value").is_some());
+    assert!(h.query_by_label("total calculates before sub, which it reads.").is_some());
+    for row in ["1. total: 0", "2. sub: 6", "3. other: $4.00"] {
+        assert!(h.query_by_label(row).is_some(), "{row}");
+    }
+    // The selected field's arrows move it.
+    assert!(h.query_by_label("Later in calculation order: total").is_none(), "arrows only on the selected field or the one pointed at");
+    h.get_by_label("1. total: 0").click();
+    h.run_steps(3);
+    h.get_by_label("Later in calculation order: total").click();
+    h.run_steps(3);
+    assert_eq!(order(&h), ["sub", "total", "other"]);
+    assert_eq!(undo_label(&h).as_deref(), Some("Set calculation order"));
+    // Alt+↑ moves it back.
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowUp);
+    h.run_steps(3);
+    assert_eq!(order(&h), ["total", "sub", "other"]);
+    // Dragging other onto the first row puts it first.
+    let from = h.get_by_label("3. other: $4.00").rect().center();
+    let to = h.get_by_label("1. total: 6").rect().center();
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(4);
+    assert_eq!(order(&h), ["other", "total", "sub"]);
+    // Fix order moves only total, after sub, and the card says the order is right.
+    h.get_by_label("Fix order").click();
+    h.run_steps(3);
+    assert_eq!(order(&h), ["other", "sub", "total"]);
+    assert_eq!(undo_label(&h).as_deref(), Some("Set calculation order"));
+    assert!(h.query_by_label("Every field calculates after the fields it reads.").is_some());
+    assert!(h.query_by_label("Fix order").is_none());
+    // Its Undo takes Fix order back.
+    h.get_by_label("Undo").click();
+    h.run_steps(3);
+    assert_eq!(order(&h), ["other", "total", "sub"]);
+    // A row selects its field.
+    h.get_by_label("3. sub: 6").click();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].prepare.selected.as_ref().map(|s| s.0.as_str()), Some("sub"));
+}
+
+/// Fields that read each other get a card of their own, which Fix order leaves alone, and its
+/// link opens the first one's formula.
+#[test]
+fn a_loop_has_its_own_card_that_opens_the_formula() {
+    use pdfcraft_engine::form_scripts::Calculate;
+    use pdfcraft_engine::{Edit, FieldProps, NewField};
+    use pdfcraft_ui_egui::prepare::FieldTab;
+    let mut h = harness();
+    for (i, (name, formula)) in [("a", "b + 1"), ("b", "a + 1")].into_iter().enumerate() {
+        let y = 200.0 + 30.0 * i as f64;
+        let kind = NewField::Text { multiline: false };
+        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
+        let props = Box::new(FieldProps { calculate: Some(Calculate::Notation(formula.into())), ..Default::default() });
+        h.state_mut().apply_edit(Edit::SetFieldProps { name: name.into(), props });
+    }
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    h.get_by_label("Calculation order").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("a and b read each other").is_some());
+    assert!(h.query_by_label("Every field outside a loop calculates after the fields it reads.").is_some());
+    assert!(h.query_by_label("Fix order").is_none(), "no order fixes a loop");
+    h.get_by_label("Edit a's formula").click();
+    h.run_steps(3);
+    let draft = h.state().field_props.as_ref().map(|d| (d.field.clone(), d.tab));
+    assert_eq!(draft, Some(("a".to_owned(), FieldTab::Calculate)));
+}

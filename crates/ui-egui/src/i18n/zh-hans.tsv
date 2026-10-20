@@ -197,6 +197,36 @@
 	Could not save: {e}	无法保存：{e}
 	Earlier in tab order	在 Tab 顺序中前移
 	Later in tab order	在 Tab 顺序中后移
+	Calculation order	计算顺序
+	Fix order	修正顺序
+	Move only what must move, so every field calculates after the fields it reads.	只移动必须移动的字段，使每个字段都在它读取的字段之后计算。
+	Earlier in calculation order	在计算顺序中前移
+	Later in calculation order	在计算顺序中后移
+	Too early	过早
+	Reads {name}, which calculates later, so it shows an old value.	读取 {name}，而它在之后才计算，因此显示的是旧值。
+	Loop	循环
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	读取 {names}，而它们又读取此字段。任何顺序都无法修正循环：请修改其中一个公式。
+	Not in order	不在顺序中
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF 中保存的计算顺序缺少此字段：其他 PDF 查看器可能不会计算它。
+	Back to Prepare a form	返回准备表单
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	此表单中还没有计算自身值的字段。在字段属性的“计算”选项卡中为字段设置计算后，它会显示在这里。
+	{names} and {last}	{names}和{last}
+	{field} reads no other field	{field} 不读取其他字段
+	{field} reads {fields}	{field} 读取 {fields}
+	No field reads it	没有字段读取它
+	The order saved in the PDF needs tidying	PDF 中保存的顺序需要整理
+	Moves only what must move	只移动必须移动的
+	Every field calculates after the fields it reads.	每个字段都在它读取的字段之后计算。
+	Every field outside a loop calculates after the fields it reads.	循环之外的每个字段都在它读取的字段之后计算。
+	{field} reads its own value	{field} 读取自身的值
+	{fields} read each other	{fields} 相互读取
+	No order can fix a loop. Change one of the formulas.	任何顺序都无法修复循环。请修改其中一个公式。
+	Edit {field}'s formula	编辑 {field} 的公式
+	Order · top calculates first	顺序 · 上方的先计算
+	Script	脚本
+	Links on page	页面上的关联
+	Show on the page which fields each field reads	在页面上显示每个字段读取哪些字段
+	Drag a field to move it, or select it and press {up} or {down}.	拖动字段以移动它，或选中它后按 {up} 或 {down}。
 	From:	从：
 	To:	至：
 	High Resolution	高分辨率
@@ -2307,6 +2337,12 @@ animation effects	Off	关
 	no output folder was chosen	未选择输出文件夹
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	已下载 {n} 个 PDF
 @plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} 个计算已改用新名称。
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	计算顺序中有 {n} 个不计算任何内容的条目。“修正顺序”会将其删除。
+@plural	{fields} reads it|{fields} read it	{fields} 读取它
+@plural	{n} field shows an old value|{n} fields show old values	{n} 个字段显示旧值
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} 在它读取的 {fields} 之前计算。
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	另有 {n} 个字段计算过早。
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} 不在 PDF 中保存的顺序里，其他 PDF 查看器可能不会计算。
 	Scan	扫描
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	在白纸上签名，并在明亮、均匀的光线下拍照（使用闪光灯）。选择照片或将其拖放到此处：PdfCraft 会找到签名并去除纸张背景。
 	Choose photo…	选择照片…
