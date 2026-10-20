@@ -2043,6 +2043,7 @@
 	Set status Rejected	Задай състояние „Отхвърлено“
 	Set status Unmarked	Задай състояние „Неотбелязано“
 	Set tab order	Задай реда на обхождане
+	Set calculation order	Задаване на ред на изчисляване
 	Set the image of {name}	Задай изображението на {name}
 	Spreadsheet (.xlsx)	Електронна таблица (.xlsx)
 	Square	Квадрат

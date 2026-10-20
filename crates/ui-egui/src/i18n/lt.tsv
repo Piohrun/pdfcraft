@@ -2281,6 +2281,7 @@ comment menu	Edit	Redaguoti
 	Set status Rejected	Nustatyti būseną „Atmesta“
 	Set status Unmarked	Nustatyti būseną „Nežymėta“
 	Set tab order	Nustatyti tabuliavimo tvarką
+	Set calculation order	Nustatyti skaičiavimo tvarką
 	Set the image of {name}	Nustatyti {name} paveikslėlį
 	Shadings	Spalvų perėjimai
 	Show a field	Rodyti lauką

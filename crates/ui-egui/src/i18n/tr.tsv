@@ -1823,6 +1823,7 @@
 	Delete field	Alanı sil
 	Duplicate field	Alanı çoğalt
 	Set tab order	Sekme sırasını ayarla
+	Set calculation order	Hesaplama sırasını ayarla
 	Change initial view	İlk görünümü değiştir
 	Set alternate text	Alternatif metni ayarla
 	Mark figure as decorative	Şekli dekoratif olarak işaretle

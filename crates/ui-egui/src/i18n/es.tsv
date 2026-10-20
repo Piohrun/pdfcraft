@@ -1942,6 +1942,7 @@ action wizard	Start	Iniciar
 	Delete field	Eliminar campo
 	Duplicate field	Duplicar campo
 	Set tab order	Definir orden de tabulación
+	Set calculation order	Establecer el orden de cálculo
 	Change initial view	Cambiar vista inicial
 	Set alternate text	Definir texto alternativo
 	Mark figure as decorative	Marcar figura como decorativa

@@ -698,6 +698,34 @@ pub fn rename_in_calculation(js: &str, old: &str, new: &str) -> Option<String> {
     (got == expected).then_some(out)
 }
 
+/// The fields a Calculate script reads by name (see [`calculation_sites`]), each once, in the
+/// order it first names them.
+pub fn calculation_reads(js: &str) -> Vec<String> {
+    let sites = calculation_sites(js);
+    unique(sites.iter().flat_map(|(_, site)| site.names()).map(str::to_owned))
+}
+
+impl Calculate {
+    /// The fields it reads, each once, in the order it first names them. A name also stands for
+    /// the fields under it (`row` for `row.0` and `row.1`), as [`calculate`] reads them.
+    pub fn reads(&self) -> Vec<String> {
+        match self {
+            Calculate::None => Vec::new(),
+            Calculate::Simple { fields, .. } => unique(fields.iter().cloned()),
+            Calculate::Notation(expr) => unique(notation_tokens(expr).into_iter().filter_map(|(_, token)| match token {
+                Notation::Name(name) => Some(name),
+                _ => None,
+            })),
+        }
+    }
+}
+
+/// `names` without repeats, in order.
+fn unique(names: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    names.into_iter().filter(|n| seen.insert(n.clone())).collect()
+}
+
 // ── running them ────────────────────────────────────────────────────────────────────────────
 
 /// AFMakeNumber: a number from typed text (currency symbols, group separators, spaces and a
@@ -1528,6 +1556,31 @@ mod tests {
             let back = renamed.as_deref().and_then(|r| rename_in_calculation(r, &new, &old));
             proptest::prop_assert_eq!(back, Some(js));
         }
+
+        /// What a formula reads is the same whether it is read from the tab's settings or from
+        /// the script they are written as.
+        #[test]
+        fn a_formula_reads_the_same_fields_as_its_script(names in proptest::collection::vec("\\PC{1,8}", 1..5), sum in proptest::bool::ANY) {
+            proptest::prop_assume!(!names.iter().any(|n| n.contains("VCALC")));
+            let c = if sum {
+                Calculate::Simple { op: CalcOp::Product, fields: names.clone() }
+            } else {
+                Calculate::Notation(names.iter().map(|n| notation_name(n)).collect::<Vec<_>>().join(" + "))
+            };
+            let js = calculate_js(&c).unwrap();
+            proptest::prop_assert_eq!(calculation_reads(&js), c.reads());
+            proptest::prop_assert_eq!(c.reads(), unique(names));
+        }
+    }
+
+    #[test]
+    fn a_calculation_reads_each_named_field_once() {
+        assert_eq!(Calculate::Simple { op: CalcOp::Sum, fields: vec!["a".into(), "b".into(), "a".into()] }.reads(), ["a", "b"]);
+        assert_eq!(Calculate::Notation("(Unit\\ Price + 2) * qty / qty".into()).reads(), ["Unit Price", "qty"]);
+        assert_eq!(Calculate::None.reads(), Vec::<String>::new());
+        let script = "var t = getField(\"sub\").value; // getField(\"x\")\nevent.value = t + getField(\"tax\").value + getField(\"row\" + 1).value;";
+        assert_eq!(calculation_reads(script), ["sub", "tax"], "names built at run time aren't known");
+        assert_eq!(calculation_reads("AFSimple_Calculate(\"SUM\", \"a, b\");"), ["a", "b"]);
     }
 
     #[test]

@@ -1651,6 +1651,7 @@
 	Set status Rejected	Nastavi status Zavrnjeno
 	Set status Unmarked	Nastavi status Neoznačeno
 	Set tab order	Nastavi vrstni red tabulatorja
+	Set calculation order	Nastavi vrstni red izračunov
 	Set the image of {name}	Nastavi sliko za {name}
 	Set to current page ({n})	Nastavi na trenutno stran ({n})
 	Set to zero	Nastavi na nič

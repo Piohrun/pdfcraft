@@ -63,6 +63,14 @@ delete_field(&mut doc, "email")?;
   script stream that isn't UTF-8, other events' scripts and a name another field still has are
   left alone. `calculations_changed` compares two readings of a form to say which formulas an
   edit rewrote.
+- The calculation order (`/CO`, §12.7.3): `calculation_order` lists the calculated fields in the
+  order `recalculate` runs them, with the fields each formula reads (`Calculate::reads`,
+  `af::calculation_reads`; names built at run time aren't known) and what is wrong with the
+  order: a field reading one that calculates later, a loop, a field `/CO` leaves out, and `/CO`
+  entries that calculate nothing. `CalculationOrder::fixed` is Fix order: a stable topological
+  sort that keeps the current order wherever it can and leaves loops as they are.
+  `set_calculation_order` writes `/CO` afresh. A field that gets a calculation joins the end of
+  the order; one whose calculation changes keeps its place.
 - `Widget::caption` reads a push button's normal label (`/MK /CA`, including indirect values).
   `FieldProps { caption: Some((widget_index, text)), ..Default::default() }` changes or clears
   that label, independently of the field name. The index is 0-based. A label-only edit redraws

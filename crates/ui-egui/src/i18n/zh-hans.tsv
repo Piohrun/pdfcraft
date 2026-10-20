@@ -2053,6 +2053,7 @@
 	Set status Rejected	将状态设为已拒绝
 	Set status Unmarked	将状态设为未标记
 	Set tab order	设置 Tab 键顺序
+	Set calculation order	设置计算顺序
 	Set the image of {name}	设置 {name} 的图像
 	Spreadsheet (.xlsx)	电子表格（.xlsx）
 	Square	正方形

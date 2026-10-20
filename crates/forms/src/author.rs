@@ -1140,26 +1140,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
             if let Some(js) = crate::af::calculate_js(c) {
                 aa.set(b"C".to_vec(), action(&js));
             }
-            // The calculation order lists calculated fields.
-            let af_ref = ensure_form(doc)?;
-            let mut co: Vec<Object> = doc
-                .get(af_ref)
-                .as_dict()
-                .and_then(|d| d.get(b"CO").cloned())
-                .map(|c| doc.resolve(&c))
-                .and_then(|c| c.as_array().cloned())
-                .unwrap_or_default();
-            co.retain(|o| o.as_ref() != Some(f.obj));
-            if *c != crate::af::Calculate::None {
-                co.push(Object::Ref(f.obj));
-            }
-            doc.update_dict(af_ref, |d| {
-                if co.is_empty() {
-                    d.remove(b"CO");
-                } else {
-                    d.set(b"CO".to_vec(), Object::Array(co));
-                }
-            })?;
+            crate::calc_order::keep_listed(doc, f.obj, *c != crate::af::Calculate::None)?;
         }
         doc.update_dict(f.obj, |d| {
             if aa.is_empty() {

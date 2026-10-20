@@ -4595,9 +4595,9 @@ tier = "P0"
 milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
-tools = ["form_set_props", "form_fill"]
-evidence = ["crates/forms/src/tests.rs::formats_validation_and_calculations_run_like_acrobat"]
-notes = "/CO order, then other calculated fields; recalculated after every fill and Clear form"
+tools = ["form_set_props", "form_fill", "form_calculation_order"]
+evidence = ["crates/forms/src/tests.rs::formats_validation_and_calculations_run_like_acrobat", "crates/forms/src/tests.rs::the_calculation_order_is_checked_fixed_and_kept", "crates/forms/src/tests.rs::a_calculation_order_with_gaps_and_extra_entries", "crates/forms/src/tests.rs::two_fields_with_one_name_keep_their_places_in_the_order", "crates/engine/src/tests.rs::setting_the_calculation_order_recalculates_and_undoes", "crates/automation/tests/automation.rs::the_calculation_order_is_read_fixed_and_set"]
+notes = "/CO order, then other calculated fields; recalculated after every fill and Clear form. form_calculation_order reads the order with what each formula reads, says which fields read a field calculated later, which read each other in a loop and which /CO leaves out, and sets it, moves one field (as the Up/Down of Acrobat's Set Field Calculation Order dialog) or fixes it (Fix order moves only what must move). A new calculation joins the end of /CO and an edited one keeps its place. The app has no way to see or change the order yet. Acrobat's dialog is known from Adobe's help summary only, not yet observed."
 
 [[feature]]
 id = "form.event-order"

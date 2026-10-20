@@ -1847,6 +1847,7 @@ action wizard	Start	ప్రారంభించు
 	Delete field	ఫీల్డ్‌ను తొలగించు
 	Duplicate field	ఫీల్డ్‌ను నకలు చేయి
 	Set tab order	ట్యాబ్ క్రమాన్ని సెట్ చేయి
+	Set calculation order	గణన క్రమాన్ని సెట్ చేయండి
 	Change initial view	ప్రారంభ వీక్షణను మార్చు
 	Set alternate text	ప్రత్యామ్నాయ టెక్స్ట్‌ను సెట్ చేయి
 	Mark figure as decorative	చిత్రాన్ని అలంకరణగా గుర్తించు

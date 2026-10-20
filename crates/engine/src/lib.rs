@@ -56,10 +56,10 @@ pub use pdfcraft_edit::{
     Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, MarkKind, Watermark,
 };
 pub use pdfcraft_forms::{
-    BorderStyle, CheckStyle, Field as FormField, FieldAction, FieldChange, FieldFont, FieldKind as FormFieldKind, FieldProps, FieldValue,
-    Look as FieldLook, LookPatch as FieldLookPatch, NewField, TabOrder, Trigger as FieldTrigger, Widget as FormWidget, af as form_scripts,
-    appearance as form_appearance, appearance::auto_text_size_by as field_auto_text_size_by, calculations_changed as form_calculations_changed,
-    flags as field_flags,
+    BorderStyle, CalculatedField, CalculationIssue, CalculationOrder, CheckStyle, Field as FormField, FieldAction, FieldChange, FieldFont,
+    FieldKind as FormFieldKind, FieldProps, FieldValue, Look as FieldLook, LookPatch as FieldLookPatch, NewField, TabOrder, Trigger as FieldTrigger,
+    Widget as FormWidget, af as form_scripts, appearance as form_appearance, appearance::auto_text_size_by as field_auto_text_size_by,
+    calculations_changed as form_calculations_changed, flags as field_flags,
 };
 
 pub use pdfcraft_a11y as a11y;
@@ -240,7 +240,7 @@ enum Scope {
 /// Edits during which field scripts run.
 fn uses_scripts(edit: &Edit) -> bool {
     match edit {
-        Edit::SetFieldValue { .. } | Edit::ApplyScriptChanges { .. } | Edit::SetFieldScript { .. } => true,
+        Edit::SetFieldValue { .. } | Edit::ApplyScriptChanges { .. } | Edit::SetFieldScript { .. } | Edit::SetCalculationOrder { .. } => true,
         Edit::Batch { edits, .. } => edits.iter().any(uses_scripts),
         _ => false,
     }
@@ -583,6 +583,12 @@ impl Document {
     /// Edit a PDF ▸ Edit text: the lines of existing text on `page` (0-based).
     pub fn text_lines(&self, page: usize) -> Vec<pdfcraft_edit::TextLine> {
         self.editor.as_ref().and_then(|e| pdfcraft_edit::text_lines(&e.cos, page).ok()).unwrap_or_default()
+    }
+
+    /// The form's calculation order: its calculated fields in the order they calculate, what each
+    /// formula reads, what is wrong with the order, and the order Fix order writes.
+    pub fn calculation_order(&self) -> CalculationOrder {
+        self.editor.as_ref().map(|e| pdfcraft_forms::calculation_order(&e.cos, &self.form)).unwrap_or_default()
     }
 
     /// Add alternate text: the figures, in document order.
@@ -1617,6 +1623,11 @@ pub enum Edit {
         name: String,
         earlier: bool,
     },
+    /// Set the calculation order: these calculated fields first, in this order, then the others
+    /// in their current order (see [`Document::calculation_order`]). The form recalculates.
+    SetCalculationOrder {
+        names: Vec<String>,
+    },
     /// Add a header and footer (with `replace`, existing ones on those pages go first).
     AddHeaderFooter {
         pages: Vec<usize>,
@@ -1886,6 +1897,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Delete field",
     "Duplicate field",
     "Set tab order",
+    "Set calculation order",
     "Change initial view",
     "Set alternate text",
     "Mark figure as decorative",
@@ -2012,6 +2024,7 @@ impl Edit {
             Edit::DeleteField { .. } => Label::of("Delete field"),
             Edit::DuplicateField { .. } => Label::of("Duplicate field"),
             Edit::SetTabOrder { .. } | Edit::MoveInTabOrder { .. } => Label::of("Set tab order"),
+            Edit::SetCalculationOrder { .. } => Label::of("Set calculation order"),
             Edit::SetInitialView(_) => Label::of("Change initial view"),
             Edit::AutoTagText => Label::of("Automatically tag text"),
             Edit::SetAltText { .. } => Label::of("Set alternate text"),
@@ -2209,6 +2222,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::DuplicateField { .. }
         | Edit::SetTabOrder { .. }
         | Edit::MoveInTabOrder { .. }
+        | Edit::SetCalculationOrder { .. }
         | Edit::SetInitialView(_)
         | Edit::AutoTagText
         | Edit::SetAltText { .. }
@@ -2497,6 +2511,14 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::DeleteField { name } => pdfcraft_forms::delete_field(doc, name)?,
         Edit::SetTabOrder { pages, order } => pdfcraft_forms::set_tab_order(doc, pages, *order)?,
         Edit::MoveInTabOrder { name, earlier } => pdfcraft_forms::move_in_tab_order(doc, name, *earlier)?,
+        // As after a script edit: the values the new order gives show at once.
+        Edit::SetCalculationOrder { names } => {
+            pdfcraft_forms::set_calculation_order(doc, names)?;
+            match cx.js.as_mut() {
+                Some(js) => pdfcraft_forms::recalculate_with(doc, js)?,
+                None => pdfcraft_forms::recalculate(doc)?,
+            };
+        }
         Edit::SetInitialView(v) => pdfcraft_organize::set_initial_view(doc, v)?,
         Edit::AutoTagText => {
             a11y::autotag_text(doc).map_err(|e| EditError::Accessibility(e.to_string()))?;

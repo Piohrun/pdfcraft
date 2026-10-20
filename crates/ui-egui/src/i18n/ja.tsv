@@ -1940,6 +1940,7 @@
 	Delete field	フィールドを削除
 	Duplicate field	フィールドを複製
 	Set tab order	タブ順序を設定
+	Set calculation order	計算順序を設定
 	Change initial view	初期表示を変更
 	Set alternate text	代替テキストを設定
 	Mark figure as decorative	図を装飾として指定
