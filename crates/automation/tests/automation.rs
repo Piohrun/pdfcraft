@@ -3889,6 +3889,9 @@ fn the_calculation_order_is_read_fixed_and_set() {
     assert_eq!(r["fields"][3]["issues"], json!([{ "issue": "cycle", "fields": ["y"] }]));
     assert_eq!((r["fixable"].clone(), r["extra"].clone()), (json!(true), json!([])));
     assert!(r.get("undo").is_none(), "reading changes nothing");
+    // Prepare a form ▸ Calculation order is this tool headlessly.
+    let r = ok(&mut a, "command_run", json!({ "id": "form.calculation_order", "params": { "doc": doc } }));
+    assert_eq!(r["calculation_order"], json!(["total", "tax", "sub", "x", "y"]));
     let r = ok(&mut a, "form_calculation_order", json!({ "doc": doc, "fix": true }));
     assert_eq!(r["calculation_order"], json!(["sub", "tax", "total", "x", "y"]), "only what must move moves; the loop stays");
     assert_eq!(r["undo"], "Set calculation order");
