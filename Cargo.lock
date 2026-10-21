@@ -3940,6 +3940,7 @@ dependencies = [
 name = "pdfcraft"
 version = "0.11.0"
 dependencies = [
+ "chrono",
  "craft-quit",
  "eframe",
  "egui",
@@ -4048,6 +4049,7 @@ dependencies = [
 name = "pdfcraft-cos"
 version = "0.11.0"
 dependencies = [
+ "chrono",
  "hayro-syntax",
  "pdfcraft-crypt",
  "pdfcraft-filters",
@@ -4190,6 +4192,7 @@ name = "pdfcraft-js"
 version = "0.11.0"
 dependencies = [
  "boa_engine",
+ "chrono",
 ]
 
 [[package]]
@@ -4327,6 +4330,7 @@ dependencies = [
  "bp256",
  "bp384",
  "cbc",
+ "chrono",
  "crypto-bigint",
  "des",
  "ecdsa",
@@ -4362,6 +4366,7 @@ dependencies = [
  "arboard",
  "base64 0.22.1",
  "bytemuck",
+ "chrono",
  "craft-quit",
  "craft-ui",
  "eframe",
@@ -8035,6 +8040,7 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "lopdf",
  "pdfcraft-cos",
  "pdfcraft-oracle",
