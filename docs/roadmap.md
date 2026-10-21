@@ -17,6 +17,7 @@
 > **Last reviewed:** 2026-10-20 | **Last updated:** 2026-10-20 | **Change:** minor (M11 #3507: image merging preserves content stream boundaries; estimates unchanged)
 > **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (M8, gap 6 #2662: the redaction audit counts a cover over one word of a long line; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (M10: dotted-leader contents entries export as complete paragraphs; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M6: calculation scripts read their notation only from a comment, and a regular expression after a condition as one; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (M5, PR #1971: bounded nested FDF export excludes source page/page-tree dictionaries; refreshed against upstream 4db6ac4a; estimates unchanged)
 > **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** patch (M2 #3086: dotted TOC leaders no longer hide word spaces; estimates unchanged)
 
@@ -244,6 +245,7 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 | 2026-10-20 | minor | M11 #3507: image merging preserves comments and state across content streams. Estimates unchanged. |
 | 2026-10-17 | minor | M8, gap 6 #2662: a filled cover that hides half of any one word of a long line counts as a redaction-audit finding, applied or not; a sliver under half of every word stays unflagged. Estimates unchanged. |
 | 2026-10-13 | minor | M10: dotted-leader contents entries retain titles and page numbers in separate paragraphs (#1757); estimates unchanged. |
+| 2026-10-22 | minor | M6: calculation scripts: simplified field notation is read only from a comment, and a regular expression after `if (…)`, `while (…)`, `for (…)` or `with (…)` as one, so a rename leaves strings and regular expressions alone. Estimates unchanged. |
 | 2026-10-20 | minor | M6: Prepare a form ▸ Calculation order: formulas and values, what is wrong and Fix order, Up/Down, Alt+↑/↓ and drag, links on the page. Estimates unchanged. |
 | 2026-10-20 | minor | M6: `form_calculation_order` reads, checks, fixes and sets the calculation order; an edited formula keeps its place in `/CO`. Estimates unchanged. |
 | 2026-10-20 | minor | M12 #3673: Character encoding accepts Identity-H/V with Adobe CJK collections, or a predefined non-Identity CMap; unknown names and foreign registries do not establish a mapping route. Synthetic checker and read-only automation regressions passed after failing before the fix. Per-glyph validation and embedded-font extraction remain separate; estimates unchanged. |
