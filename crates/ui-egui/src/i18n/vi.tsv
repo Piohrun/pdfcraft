@@ -2684,6 +2684,12 @@ key	Space	Space
 	Words	Từ
 	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}” đã thay đổi trên đĩa sau khi được mở hoặc lưu lần cuối. Lưu lúc này sẽ thay thế phiên bản mới hơn đó bằng phiên bản này.
 @id	file.word_count	Đếm từ…
+	Bulleted list	Danh sách dấu đầu dòng
+	Numbered list	Danh sách đánh số
+	Alignment	Căn lề
+	Paragraph spacing	Khoảng cách đoạn
+	Superscript	Chỉ số trên
+	Subscript	Chỉ số dưới
 	Less	Ít hơn
 	Other options	Tùy chọn khác
 

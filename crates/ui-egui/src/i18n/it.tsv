@@ -2647,5 +2647,12 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+	Font	Carattere
+	Bulleted list	Elenco puntato
+	Numbered list	Elenco numerato
+	Alignment	Allineamento
+	Superscript	Apice
+	Subscript	Pedice
+	Paragraph spacing	Spaziatura paragrafi
 	Less	Meno
 	Other options	Altre opzioni

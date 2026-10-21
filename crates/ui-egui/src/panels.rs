@@ -516,50 +516,42 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if let Some((i, _)) = app.active_ids()
         && let Some(ed) = app.views[i].line_editor.clone()
     {
+        use crate::format_text_ui::{FontChoice, Fonts};
         let mut ed = ed;
-        let mut changed = false;
-        let font_choices = app.session.get(app.views[i].id).map(|d| d.text_editor_fonts(ed.page)).unwrap_or_default();
-        egui::ComboBox::from_id_salt("document-font-resource")
-            .selected_text(
-                ed.font_resource
-                    .as_ref()
-                    .and_then(|r| font_choices.iter().find(|f| &f.resource == r))
-                    .map_or(tl!("Keep source fonts"), |f| f.face.as_str()),
-            )
-            .show_ui(ui, |ui| {
-                changed |= ui.selectable_value(&mut ed.font_resource, None, tl!("Keep source fonts")).changed();
-                for font in font_choices.iter().filter(|f| !f.resource.starts_with("PCApproved")) {
-                    changed |= ui.selectable_value(&mut ed.font_resource, Some(font.resource.clone()), &font.face).changed();
-                }
-            });
-        if ui.button(tl!("Load font…")).clicked() {
-            app.pick_files(crate::files::FilePurpose::TextFont { page: ed.page }, false);
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        egui::ComboBox::from_id_salt("installed-document-font").selected_text(tl!("Installed fonts…")).show_ui(ui, |ui| {
-            if let Some(fonts) = crate::files::installed_font_files(ui.ctx()) {
-                if fonts.is_empty() {
-                    ui.label(tl!("No openly licensed document fonts found. Load a font file."));
-                }
-                for font in fonts {
-                    if ui.selectable_label(false, &font.face).clicked() {
-                        app.use_paths(crate::files::FilePurpose::TextFont { page: ed.page }, &[font.path]);
-                    }
-                }
-            } else {
-                ui.label(tl!("Finding document fonts…"));
+        let sources: Vec<(String, String)> = app
+            .session
+            .get(app.views[i].id)
+            .map(|d| d.text_editor_fonts(ed.page))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| (f.resource, f.face))
+            .collect();
+        let shown = ed.font_shown(&sources);
+        let out = crate::format_text_ui::panel(ui, t, &mut ed.look, Some(&mut ed.extras), Fonts { sources: Some(&sources), shown });
+        let mut changed = out.changed;
+        match out.font {
+            Some(FontChoice::KeepSource) => {
+                ed.keep_source_font();
+                changed = true;
             }
-        });
-        if let Some(look) = crate::content_ui::format_panel(ui, t, &ed.look) {
-            ed.look = look;
-            changed = true;
+            Some(FontChoice::Resource(resource)) => {
+                ed.font_resource = Some(resource);
+                changed = true;
+            }
+            Some(FontChoice::Family(family)) => {
+                ed.choose_family(family);
+                changed = true;
+            }
+            Some(FontChoice::Load) => app.pick_files(crate::files::FilePurpose::TextFont { page: ed.page }, false),
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(FontChoice::Installed(path)) => app.use_paths(crate::files::FilePurpose::TextFont { page: ed.page }, &[path]),
+            #[cfg(target_arch = "wasm32")]
+            Some(FontChoice::Installed(_)) => {}
+            None => {}
         }
-        changed |= crate::edit_text_ui::extras_panel(ui, &mut ed.extras);
         if changed {
             app.apply_line_format(i, ed, Some(ui.ctx()));
         }
-        ui.add_space(6.0);
-        ui.separator();
         return;
     }
     let image = app.active_ids().and_then(|(i, id)| {
@@ -593,21 +585,32 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     match selected {
         Some((page, index, text)) => {
-            if let Some(style) = crate::content_ui::format_panel(ui, t, &text) {
-                app.text_style = pdfcraft_engine::AddedText { text: String::new(), rect: [0.0; 4], ..style.clone() };
-                app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content: pdfcraft_engine::AddedContent::Text(style) });
+            let mut style = text.clone();
+            added_text_format(ui, t, &mut style);
+            if style != text {
+                // The reusable style follows the selection only when the edit took, so a refused one adds nothing odd later.
+                if app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content: pdfcraft_engine::AddedContent::Text(style.clone()) }) {
+                    app.text_style = pdfcraft_engine::AddedText { text: String::new(), rect: [0.0; 4], ..style };
+                }
             }
         }
         None if app.quick_tool == crate::QuickTool::AddText => {
             crate::content_ui::hint(ui, t);
-            if let Some(style) = crate::content_ui::format_panel(ui, t, &app.text_style) {
-                app.text_style = style;
-            }
+            let mut style = app.text_style.clone();
+            added_text_format(ui, t, &mut style);
+            app.text_style = style;
         }
-        None => return,
+        None => {}
     }
-    ui.add_space(6.0);
-    ui.separator();
+}
+
+/// Format text for added text: the standard families, size, colour, style and alignment.
+fn added_text_format(ui: &mut egui::Ui, t: &Tokens, style: &mut pdfcraft_engine::AddedText) {
+    let shown = style.family.label().to_string();
+    let out = crate::format_text_ui::panel(ui, t, style, None, crate::format_text_ui::Fonts { sources: None, shown });
+    if let Some(crate::format_text_ui::FontChoice::Family(family)) = out.font {
+        style.family = family;
+    }
 }
 
 impl PdfCraftApp {
