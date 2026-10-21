@@ -4075,6 +4075,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if let Some((page, rect)) = open_table {
         app.field_table_draft = Some(crate::field_table_ui::FieldTableDraft::new(app.views[index].id, page, rect, &form, generation));
         app.dialog = Some(crate::Dialog::FieldTable);
+        // The window lasts while the form is prepared. Drawn with the tool picked but its panel
+        // closed, the tool goes back to Select above, so the panel opens to keep it prepared.
+        app.left = crate::LeftPanel::Tool("form");
+        app.reveal_tools();
     }
     if let Some(n) = form_notice {
         match n {

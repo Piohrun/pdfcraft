@@ -767,6 +767,28 @@ fn the_table_window_closes_when_its_document_is_left() {
     assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false));
 }
 
+/// With its panel closed after the tool was picked, the form is still prepared and a table can be
+/// drawn: its window opens Prepare a form again, which it belongs to. Drawing sends the tool back
+/// to Select, so the window used to close itself at once, nothing being prepared any more.
+#[test]
+fn a_table_drawn_with_the_panel_closed_opens_it_again() {
+    let mut h = harness();
+    let before = names(&h).len();
+    assert!(h.state_mut().execute("form.add.text_table"));
+    h.run_steps(2);
+    h.state_mut().left_open = false;
+    h.run_steps(2);
+    assert!(h.state().is_preparing(), "the picked tool keeps the form prepared");
+    let (a, b) = (at(&h, 40.0, 240.0), at(&h, 240.0, 360.0));
+    drag(&mut h, a, b);
+    h.run_steps(3);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (Some(Dialog::FieldTable), true), "the window stays open");
+    assert!(h.state().left_open && h.state().is_preparing(), "Prepare a form is open again");
+    h.get_by_label("Add fields").click();
+    h.run_steps(3);
+    assert!(names(&h).len() > before, "the table is added");
+}
+
 /// The window belongs to the page as it was when it opened: rotated (or moved, deleted, undone)
 /// under it, the page would put the area the table was set up for somewhere else.
 #[test]
