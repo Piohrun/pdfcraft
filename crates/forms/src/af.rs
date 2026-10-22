@@ -491,6 +491,11 @@ const BEFORE_REGEX: [&str; 13] = ["return", "typeof", "case", "do", "else", "in"
 /// regular expression.
 const BEFORE_CONDITION: [&str; 4] = ["if", "while", "for", "with"];
 
+/// Whether a line ends at `s[j]`: JavaScript ends one at `\n`, `\r`, U+2028 and U+2029.
+fn line_ends_at(s: &[u8], j: usize) -> bool {
+    matches!(s.get(j..), Some([b'\n' | b'\r', ..] | [0xE2, 0x80, 0xA8 | 0xA9, ..]))
+}
+
 /// JavaScript's tokens with their byte ranges, and apart from them the text of each comment
 /// (inside its `//`, or its `/*` and `*/`): enough of the language to tell code from strings,
 /// comments and regular expressions. The tokens stop where a string, comment or template literal
@@ -516,8 +521,13 @@ fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                 i += 1;
                 continue;
             }
+            // U+2028 or U+2029: as bytes past ASCII, it would otherwise start a word.
+            0xE2 if line_ends_at(s, i) => {
+                i += 3;
+                continue;
+            }
             b'/' if s.get(i + 1) == Some(&b'/') => {
-                i = s.iter().skip(i).position(|b| *b == b'\n').map_or(s.len(), |n| i + n);
+                i = (i + 2..s.len()).find(|&j| line_ends_at(s, j)).unwrap_or(s.len());
                 comments.push(start + 2..i);
                 continue;
             }
@@ -557,7 +567,8 @@ fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                 let (mut j, mut class) = (i + 1, false);
                 let end = loop {
                     match s.get(j) {
-                        None | Some(b'\n') => break None,
+                        None => break None,
+                        Some(_) if line_ends_at(s, j) => break None,
                         Some(b'\\') => j += 2,
                         Some(b'/') if !class => break Some(j),
                         Some(b) => {
@@ -1587,6 +1598,22 @@ mod tests {
         // A line comment is a comment too, and an unfinished one still holds it.
         assert_eq!(parse_calculate("// BVCALC a EVCALC\nevent.value = 1;"), Some(Calculate::Notation("a".into())));
         assert_eq!(parse_calculate("/** BVCALC a EVCALC"), Some(Calculate::Notation("a".into())));
+    }
+
+    /// A line comment ends at any of JavaScript's line terminators, not only `\n`, so with `\r` line
+    /// endings the code after one is still code; and a `/` read as starting a regular expression
+    /// divides after all when the line ends first.
+    #[test]
+    fn a_line_comment_ends_at_any_line_terminator() {
+        for end in ["\n", "\r", "\r\n", "\u{2028}", "\u{2029}"] {
+            let string = format!("// header{end}var s = \"BVCALC a EVCALC\"; event.value = getField(\"b\").value;");
+            assert_eq!(parse_calculate(&string), None, "{end:?}");
+            assert_eq!(rename_in_calculation(&string, "a", "qty"), None, "{end:?}");
+            let script = format!("// note{end}getField(\"a\").value;");
+            assert_eq!(rename_in_calculation(&script, "a", "qty"), Some(script.replace("\"a\"", "\"qty\"")), "{end:?}");
+            let divides = format!("var n = i++ / 2;{end}event.value = getField(\"a\").value / 4;");
+            assert_eq!(rename_in_calculation(&divides, "a", "qty"), Some(divides.replace("\"a\"", "\"qty\"")), "{end:?}");
+        }
     }
 
     /// A `/` after the condition of `if`, `while`, `for` or `with` starts a regular expression,
