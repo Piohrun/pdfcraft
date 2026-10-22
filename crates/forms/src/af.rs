@@ -488,7 +488,8 @@ type Token = (Range<usize>, Js);
 const BEFORE_REGEX: [&str; 13] = ["return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw", "instanceof", "yield"];
 
 /// Words whose condition, in parentheses, comes before a statement, so a `/` after it starts a
-/// regular expression.
+/// regular expression. The `while` that ends a `do` loop counts too: the loop ends at its `)`, so
+/// a `/` after it starts the next statement, and can't divide.
 const BEFORE_CONDITION: [&str; 4] = ["if", "while", "for", "with"];
 
 /// Whether a line ends at `s[j]`: JavaScript ends one at `\n`, `\r`, U+2028 and U+2029.
@@ -1638,6 +1639,9 @@ mod tests {
         // A quote inside it doesn't start a string that hides the rest of the script.
         let quote = "while (i--) /\"/.test(s); event.value = getField(\"a\").value;";
         assert_eq!(renamed(quote), Some(quote.replace("\"a\"", "\"qty\"")));
+        // The same after the `while` that ends a `do` loop.
+        let after_do = "do i++; while (i < n) /\"/.test(s); event.value = getField(\"a\").value;";
+        assert_eq!(renamed(after_do), Some(after_do.replace("\"a\"", "\"qty\"")));
         // After a call, or a method that happens to be called `if`, the `/` divides.
         let divides = "event.value = Math.abs(getField(\"b\").value) / 2 + getField(\"a\").value / 3 + o.if(x) / 4 + getField(\"a\").value / 5;";
         assert_eq!(renamed(divides), Some(divides.replace("\"a\"", "\"qty\"")));
