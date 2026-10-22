@@ -516,6 +516,36 @@
 	Could not save: {e}	Impossibile salvare: {e}
 	Earlier in tab order	Prima nell'ordine di tabulazione
 	Later in tab order	Dopo nell'ordine di tabulazione
+	Calculation order	Ordine di calcolo
+	Fix order	Correggi ordine
+	Move only what must move, so every field calculates after the fields it reads.	Sposta solo ciò che deve spostarsi, così ogni campo viene calcolato dopo i campi che legge.
+	Earlier in calculation order	Prima nell'ordine di calcolo
+	Later in calculation order	Dopo nell'ordine di calcolo
+	Too early	Troppo presto
+	Reads {name}, which calculates later, so it shows an old value.	Legge {name}, che viene calcolato dopo, quindi mostra un valore vecchio.
+	Loop	Ciclo
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Legge {names}, che a loro volta lo leggono. Nessun ordine può correggere un ciclo: modifica una delle formule.
+	Not in order	Fuori ordine
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Manca nell'ordine di calcolo salvato nel PDF: altri visualizzatori PDF potrebbero non calcolarlo.
+	Back to Prepare a form	Torna a Prepara un modulo
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Nessun campo di questo modulo calcola ancora il proprio valore. Assegna un calcolo a un campo nella scheda Calcolo delle sue proprietà e comparirà qui.
+	{names} and {last}	{names} e {last}
+	{field} reads no other field	{field} non legge nessun altro campo
+	{field} reads {fields}	{field} legge {fields}
+	No field reads it	Nessun campo lo legge
+	The order saved in the PDF needs tidying	L'ordine salvato nel PDF va riordinato
+	Moves only what must move	Sposta solo ciò che va spostato
+	Every field calculates after the fields it reads.	Ogni campo viene calcolato dopo i campi che legge.
+	Every field outside a loop calculates after the fields it reads.	Ogni campo fuori da un ciclo viene calcolato dopo i campi che legge.
+	{field} reads its own value	{field} legge il proprio valore
+	{fields} read each other	{fields} si leggono a vicenda
+	No order can fix a loop. Change one of the formulas.	Nessun ordine può correggere un ciclo. Modifica una delle formule.
+	Edit {field}'s formula	Modifica la formula di {field}
+	Order · top calculates first	Ordine · in alto si calcola per primo
+	Script	Script
+	Links on page	Collegamenti sulla pagina
+	Show on the page which fields each field reads	Mostra sulla pagina quali campi legge ogni campo
+	Drag a field to move it, or select it and press {up} or {down}.	Trascina un campo per spostarlo, oppure selezionalo e premi {up} o {down}.
 	From:	Da:
 	To:	A:
 	High Resolution	Alta risoluzione
@@ -1933,6 +1963,7 @@
 	Delete field	Elimina campo
 	Duplicate field	Duplica campo
 	Set tab order	Imposta ordine di tabulazione
+	Set calculation order	Imposta ordine di calcolo
 	Change initial view	Modifica vista iniziale
 	Set alternate text	Imposta testo alternativo
 	Mark figure as decorative	Contrassegna figura come decorativa
@@ -2350,6 +2381,13 @@ animation effects	Off	Disattivati
 	no unused output name	nessun nome di output libero
 	no output folder was chosen	nessuna cartella di output scelta
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Scaricato {n} PDF|Scaricati {n} PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} calcolo ora usa il nuovo nome.|{n} calcoli ora usano il nuovo nome.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	L'ordine di calcolo ha {n} voce che non calcola nulla. «Correggi ordine» la rimuove.|L'ordine di calcolo ha {n} voci che non calcolano nulla. «Correggi ordine» le rimuove.
+@plural	{fields} reads it|{fields} read it	{fields} lo legge|{fields} lo leggono
+@plural	{n} field shows an old value|{n} fields show old values	{n} campo mostra un valore vecchio|{n} campi mostrano valori vecchi
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} viene calcolato prima di {fields}, che legge.|{field} viene calcolato prima di {fields}, che legge.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Ancora {n} campo viene calcolato troppo presto.|Altri {n} campi vengono calcolati troppo presto.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} manca nell'ordine salvato nel PDF, quindi altri visualizzatori PDF potrebbero non calcolarlo.|{fields} mancano nell'ordine salvato nel PDF, quindi altri visualizzatori PDF potrebbero non calcolarli.
 	Scan	Scansiona
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Firma un foglio di carta bianca e fotografalo con una luce intensa e uniforme (usa il flash). Scegli la foto o trascinala qui: PdfCraft trova la firma e rimuove la carta.
 	Choose photo…	Scegli foto…

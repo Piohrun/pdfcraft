@@ -3858,6 +3858,121 @@ fn form_formats_and_calculations_through_tools() {
     ));
 }
 
+/// Renaming a field renames it in the formulas that read it: a sum dropped the field, notation
+/// read it as 0 and a script kept a stale value.
+#[test]
+fn renaming_a_field_keeps_the_formulas_that_read_it() {
+    let dir = workdir("formrename");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (i, name) in ["a", "b", "c", "d", "e", "x", "sum", "product", "double", "total"].into_iter().enumerate() {
+        let y = 20 + 30 * i;
+        ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, y, 180, y + 22], "name": name }));
+    }
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "sum", "calculate": { "op": "sum", "fields": ["a", "b"] } }));
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "product", "calculate": { "notation": "c * d" } }));
+    ok(
+        &mut a,
+        "form_set_script",
+        json!({ "doc": doc, "field": "double", "event": "calculate", "script": "event.value = getField(\"e\").value * 2;" }),
+    );
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "total", "calculate": { "op": "sum", "fields": ["x"] } }));
+    let renamed = |a: &mut Automation, from: &str, to: &str| ok(a, "form_set_props", json!({ "doc": doc, "field": from, "name": to }));
+    assert_eq!(renamed(&mut a, "a", "qty")["formulas_updated"], json!(["sum"]));
+    assert_eq!(renamed(&mut a, "c", "price")["formulas_updated"], json!(["product"]));
+    assert_eq!(renamed(&mut a, "e", "base")["formulas_updated"], json!(["double"]));
+    assert_eq!(renamed(&mut a, "total", "grand")["formulas_updated"], json!([]), "a calculated field's own name is in no formula");
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "qty": "10", "b": "2", "price": "10", "d": "4", "base": "10", "x": "9" } }));
+    let values = |a: &mut Automation| {
+        let f = ok(a, "form_fields", json!({ "doc": doc }));
+        let value = |name: &str| f["fields"].as_array().unwrap().iter().find(|x| x["name"] == name).map(|x| x["value"].clone());
+        [value("sum"), value("product"), value("double"), value("grand")]
+    };
+    assert_eq!(values(&mut a), [Some(json!("12")), Some(json!("40")), Some(json!("20")), Some(json!("9"))]);
+    let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let field = |name: &str| f["fields"].as_array().unwrap().iter().find(|x| x["name"] == name).unwrap().clone();
+    assert_eq!(field("sum")["calculate"]["fields"], json!(["qty", "b"]));
+    assert_eq!(field("product")["calculate"]["notation"], "price * d");
+    // The rename and the formulas it changed are one undo step: undo the fill, then the last
+    // three renames.
+    for _ in 0..4 {
+        ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    }
+    let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let field = |name: &str| f["fields"].as_array().unwrap().iter().find(|x| x["name"] == name).cloned();
+    assert!(field("c").is_some() && field("price").is_none());
+    assert_eq!(field("product").unwrap()["calculate"]["notation"], "c * d", "undone together with the rename");
+    // The renamed field's own formula, changed in the same call, is not one the rename
+    // rewrote, though the name is stored trimmed.
+    let r = ok(
+        &mut a,
+        "form_set_props",
+        json!({ "doc": doc, "field": "sum", "name": " added ", "calculate": { "op": "sum", "fields": ["qty", "b", "x"] } }),
+    );
+    assert_eq!(r["formulas_updated"], json!([]));
+}
+
+/// The calculation order through the tool: read with what each formula reads and what is wrong,
+/// fixed so stale values come out right, moved, set, and undone.
+#[test]
+fn the_calculation_order_is_read_fixed_and_set() {
+    let dir = workdir("calcorder");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (i, name) in ["qty", "price", "sub", "total", "tax", "x", "y"].into_iter().enumerate() {
+        let y = 20 + 30 * i;
+        ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, y, 180, y + 22], "name": name }));
+    }
+    // Defined backwards: total and tax calculate before the fields they read.
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "total", "calculate": { "op": "sum", "fields": ["sub", "tax"] } }));
+    ok(
+        &mut a,
+        "form_set_script",
+        json!({ "doc": doc, "field": "tax", "event": "calculate", "script": "event.value = getField(\"sub\").value / 10;" }),
+    );
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "sub", "calculate": { "notation": "qty * price" } }));
+    // x and y read each other.
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "x", "calculate": { "notation": "y + 1" } }));
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "y", "calculate": { "notation": "x + 1" } }));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "qty": "3", "price": "10" } }));
+    let value = |a: &mut Automation, name: &str| {
+        let f = ok(a, "form_fields", json!({ "doc": doc }));
+        f["fields"].as_array().unwrap().iter().find(|x| x["name"] == name).map(|x| x["value"].clone()).unwrap()
+    };
+    assert_eq!((value(&mut a, "total"), value(&mut a, "tax")), (json!("0"), json!("0")), "stale: they calculate too early");
+    let r = ok(&mut a, "form_calculation_order", json!({ "doc": doc }));
+    assert_eq!(r["calculation_order"], json!(["total", "tax", "sub", "x", "y"]));
+    assert_eq!(r["fields"][0]["reads"], json!(["sub", "tax"]));
+    assert_eq!(r["fields"][0]["issues"], json!([{ "issue": "runs_too_early", "field": "tax" }, { "issue": "runs_too_early", "field": "sub" }]));
+    assert_eq!(r["fields"][1]["issues"], json!([{ "issue": "runs_too_early", "field": "sub" }]), "a script's reads are checked too");
+    assert_eq!(r["fields"][3]["issues"], json!([{ "issue": "cycle", "fields": ["y"] }]));
+    assert_eq!((r["fixable"].clone(), r["extra"].clone()), (json!(true), json!([])));
+    assert!(r.get("undo").is_none(), "reading changes nothing");
+    // Prepare a form ▸ Calculation order is this tool headlessly.
+    let r = ok(&mut a, "command_run", json!({ "id": "form.calculation_order", "params": { "doc": doc } }));
+    assert_eq!(r["calculation_order"], json!(["total", "tax", "sub", "x", "y"]));
+    let r = ok(&mut a, "form_calculation_order", json!({ "doc": doc, "fix": true }));
+    assert_eq!(r["calculation_order"], json!(["sub", "tax", "total", "x", "y"]), "only what must move moves; the loop stays");
+    assert_eq!(r["undo"], "Set calculation order");
+    assert_eq!(r["fixable"], false);
+    assert_eq!((value(&mut a, "total"), value(&mut a, "tax")), (json!("33"), json!("3")), "recalculated in the new order");
+    let r = ok(&mut a, "form_calculation_order", json!({ "doc": doc, "field": "y", "move": "earlier" }));
+    assert_eq!(r["calculation_order"], json!(["sub", "tax", "total", "y", "x"]));
+    let r = ok(&mut a, "form_calculation_order", json!({ "doc": doc, "order": ["x"] }));
+    assert_eq!(r["calculation_order"], json!(["x", "sub", "tax", "total", "y"]), "the fields named first, the others after them");
+    for bad in [json!({ "order": ["qty"] }), json!({ "order": ["sub", "sub"] }), json!({ "field": "qty" }), json!({ "fix": true, "field": "x" })] {
+        let mut args = bad.clone();
+        args["doc"] = json!(doc);
+        assert!(a.call("form_calculation_order", &args).is_err(), "{bad}");
+    }
+    for _ in 0..3 {
+        ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    }
+    let r = ok(&mut a, "form_calculation_order", json!({ "doc": doc }));
+    assert_eq!(r["calculation_order"], json!(["total", "tax", "sub", "x", "y"]));
+    assert_eq!((value(&mut a, "total"), value(&mut a, "tax")), (json!("0"), json!("0")), "undone with the values it recalculated");
+}
+
 #[test]
 fn tab_order_and_field_appearance_through_tools() {
     let dir = workdir("taborder");

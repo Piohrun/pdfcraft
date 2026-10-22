@@ -2,7 +2,7 @@
 //! prepare a form (add fields one at a time or as a table, change and delete them).
 
 use pdfcraft_engine::form_scripts::{CalcOp, Calculate, Format, Validate};
-use pdfcraft_engine::{Edit, FieldProps, FieldValue, FormField, FormFieldKind, NewField, field_flags};
+use pdfcraft_engine::{CalculationIssue, Edit, FieldProps, FieldValue, FormField, FormFieldKind, NewField, field_flags};
 use serde_json::{Value, json};
 
 use crate::{Args, Automation, Result, ToolError, failed};
@@ -447,11 +447,23 @@ impl Automation {
         } else {
             edits.pop().ok_or_else(|| bad("give a field name"))?
         };
+        // A rename also renames the field in the formulas that read it.
+        let before = if a.get("name").is_some() { Some(self.doc(a)?.form.clone()) } else { None };
         let mut out = self.apply(a, edit)?;
         if bulk {
             out["fields"] = json!(names);
         } else {
             out["field"] = json!(new_name);
+        }
+        if let Some(before) = before {
+            let after = &self.doc(a)?.form;
+            // The renamed field itself, found by object: the name stored can differ from the
+            // argument (trimmed, kept under its parent's prefix).
+            let own =
+                names.first().and_then(|n| before.iter().find(|f| &f.name == n)).and_then(|f| after.iter().find(|g| g.obj == f.obj)).map(|g| &g.name);
+            let mut updated = pdfcraft_engine::form_calculations_changed(&before, after);
+            updated.retain(|f| Some(f) != own);
+            out["formulas_updated"] = json!(updated);
         }
         Ok(out)
     }
@@ -582,6 +594,54 @@ impl Automation {
         };
         let mut out = self.apply(a, Edit::SetTabOrder { pages, order })?;
         out["tab_order"] = self.tab_sequence(a)?;
+        Ok(out)
+    }
+
+    pub(crate) fn form_calculation_order(&mut self, a: &Args) -> Result<Value> {
+        let current = self.doc(a)?.calculation_order();
+        let fix = a.opt_bool("fix")?.unwrap_or(false);
+        let field = a.opt_str("field")?;
+        let order = a.get("order").map(|_| a.strs("order")).transpose()?;
+        if usize::from(fix) + usize::from(field.is_some()) + usize::from(order.is_some()) > 1 {
+            return Err(bad("give one change at a time: order, field with move, or fix"));
+        }
+        let names: Option<Vec<String>> = if let Some(order) = order {
+            Some(order.into_iter().map(str::to_owned).collect())
+        } else if let Some(field) = field {
+            let earlier = match a.opt_str("move")?.unwrap_or("earlier") {
+                "earlier" => true,
+                "later" => false,
+                m => return Err(bad(format!("move must be earlier or later, not {m:?}"))),
+            };
+            let mut names: Vec<String> = current.fields.iter().map(|f| f.name.clone()).collect();
+            let i = names.iter().position(|n| n == field).ok_or_else(|| bad(format!("{field:?} is not a calculated field")))?;
+            // Already first or last: nothing moves.
+            let j = if earlier { i.checked_sub(1) } else { Some(i + 1).filter(|j| *j < names.len()) };
+            j.map(|j| {
+                names.swap(i, j);
+                names
+            })
+        } else {
+            (fix && current.fixable()).then(|| current.fixed())
+        };
+        let mut out = match names {
+            Some(names) => self.apply(a, Edit::SetCalculationOrder { names })?,
+            None => json!({}),
+        };
+        let order = self.doc(a)?.calculation_order();
+        let issue = |i: &CalculationIssue| match i {
+            CalculationIssue::RunsTooEarly { field } => json!({ "issue": "runs_too_early", "field": field }),
+            CalculationIssue::Cycle { fields } => json!({ "issue": "cycle", "fields": fields }),
+            CalculationIssue::NotInOrder => json!({ "issue": "not_in_order" }),
+        };
+        out["calculation_order"] = json!(order.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>());
+        out["fields"] = order
+            .fields
+            .iter()
+            .map(|f| json!({ "name": f.name, "reads": f.reads, "listed": f.listed, "issues": f.issues.iter().map(issue).collect::<Vec<_>>() }))
+            .collect();
+        out["extra"] = json!(order.extra);
+        out["fixable"] = json!(order.fixable());
         Ok(out)
     }
 

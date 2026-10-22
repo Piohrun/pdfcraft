@@ -68,6 +68,8 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 log = "0.4"
 kurbo = "0.13"
+# All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 
 # testing
 proptest = "1"

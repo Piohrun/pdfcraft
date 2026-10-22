@@ -4594,10 +4594,10 @@ area = "F"
 tier = "P0"
 milestone = "M6"
 status = "shipped"
-commands = ["form.field.properties"]
-tools = ["form_set_props", "form_fill"]
-evidence = ["crates/forms/src/tests.rs::formats_validation_and_calculations_run_like_acrobat"]
-notes = "/CO order, then other calculated fields; recalculated after every fill and Clear form"
+commands = ["form.field.properties", "form.calculation_order"]
+tools = ["form_set_props", "form_fill", "form_calculation_order"]
+evidence = ["crates/forms/src/tests.rs::formats_validation_and_calculations_run_like_acrobat", "crates/forms/src/tests.rs::the_calculation_order_is_checked_fixed_and_kept", "crates/forms/src/tests.rs::a_calculation_order_with_gaps_and_extra_entries", "crates/forms/src/tests.rs::two_fields_with_one_name_keep_their_places_in_the_order", "crates/engine/src/tests.rs::setting_the_calculation_order_recalculates_and_undoes", "crates/automation/tests/automation.rs::the_calculation_order_is_read_fixed_and_set", "crates/ui-egui/tests/prepare.rs::the_calculation_order_is_moved_dragged_and_fixed"]
+notes = "/CO order, then other calculated fields; recalculated after every fill and Clear form. Order editing: Prepare a form ▸ Calculation order lists the calculated fields in order with their formulas and values, Up/Down arrows (as Acrobat's Set Field Calculation Order dialog), Alt+Up/Down and drag, says which fields read a field calculated later, which read each other in a loop and which /CO leaves out, and Fix order moves only what must move; on the page it numbers each calculated field's step and draws arrows from the fields the focused field reads and to the fields that read it; form_calculation_order reads, sets, moves and fixes it. A new calculation joins the end of /CO and an edited one keeps its place. Acrobat's dialog is known from Adobe's help summary only, not yet observed."
 
 [[feature]]
 id = "form.event-order"
@@ -4968,8 +4968,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
 tools = ["form_set_props", "form_fill"]
-evidence = ["crates/ui-egui/tests/prepare.rs::format_validate_and_calculate_tabs", "crates/automation/tests/automation.rs::form_formats_and_calculations_through_tools"]
-notes = "sum/product/average/min/max of picked fields, simplified field notation; custom script pending"
+evidence = ["crates/ui-egui/tests/prepare.rs::format_validate_and_calculate_tabs", "crates/automation/tests/automation.rs::form_formats_and_calculations_through_tools", "crates/forms/src/tests.rs::renaming_a_field_renames_it_in_the_calculations_that_read_it", "crates/forms/src/tests.rs::a_rename_reaches_every_stored_form_of_a_calculation", "crates/automation/tests/automation.rs::renaming_a_field_keeps_the_formulas_that_read_it", "crates/ui-egui/tests/prepare.rs::renaming_a_field_says_how_many_calculations_now_use_the_new_name"]
+notes = "sum/product/average/min/max of picked fields, simplified field notation; custom script pending. Renaming a field renames it in the calculations that read it (field lists, notation, and getField calls naming it in a string literal), in the rename's undo step; Field Properties says how many changed and form_set_props lists them. Not rewritten: names built at run time, other events' scripts, document-level scripts. Whether Acrobat does this is not observed."
 
 [[feature]]
 id = "form.props-selection-change"

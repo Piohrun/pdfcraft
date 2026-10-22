@@ -990,6 +990,7 @@ fn is_form_edit(edit: &Edit) -> bool {
             | Edit::SetFieldProps { .. }
             | Edit::SetFieldImage { .. }
             | Edit::SetFieldScript { .. }
+            | Edit::SetCalculationOrder { .. }
             | Edit::ApplyScriptChanges { .. }
     )
 }

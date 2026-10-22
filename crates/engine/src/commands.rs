@@ -275,6 +275,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("form.tab_order.row", "Tab order: by rows", None, None, HasFields, "rows-3"),
     c("form.tab_order.column", "Tab order: by columns", None, None, HasFields, "columns-3"),
     c("form.tab_order.structure", "Tab order: by document structure", None, None, HasFields, "list"),
+    c("form.calculation_order", "Calculation order", None, None, Document, "list-ordered"),
     c("edit.text", "Add text", None, None, Modification, "type"),
     c("edit.edit_text", "Edit text & images", None, None, Modification, "text-cursor-input"),
     c("edit.link", "Add or edit links", None, None, Modification, "link-2"),

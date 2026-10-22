@@ -681,6 +681,36 @@ theme	Appearance	Giao diện
 	Larger pages	Trang lớn hơn
 	Later	Để sau
 	Later in tab order	Muộn hơn theo thứ tự tab
+	Calculation order	Thứ tự tính toán
+	Fix order	Sửa thứ tự
+	Move only what must move, so every field calculates after the fields it reads.	Chỉ di chuyển những gì cần di chuyển, để mỗi trường được tính sau các trường mà nó đọc.
+	Earlier in calculation order	Sớm hơn theo thứ tự tính toán
+	Later in calculation order	Muộn hơn theo thứ tự tính toán
+	Too early	Quá sớm
+	Reads {name}, which calculates later, so it shows an old value.	Đọc {name}, trường được tính sau, nên hiển thị giá trị cũ.
+	Loop	Vòng lặp
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Đọc {names}, các trường này lại đọc ngược nó. Không thứ tự nào sửa được vòng lặp: hãy đổi một trong các công thức.
+	Not in order	Không có trong thứ tự
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Không có trong thứ tự tính toán lưu trong PDF: các trình xem PDF khác có thể không tính trường này.
+	Back to Prepare a form	Quay lại Chuẩn bị biểu mẫu
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Chưa có trường nào trong biểu mẫu này tự tính giá trị. Hãy đặt phép tính cho một trường ở thẻ Tính toán trong thuộc tính của nó, trường đó sẽ hiện ở đây.
+	{names} and {last}	{names} và {last}
+	{field} reads no other field	{field} không đọc trường nào khác
+	{field} reads {fields}	{field} đọc {fields}
+	No field reads it	Không trường nào đọc nó
+	The order saved in the PDF needs tidying	Thứ tự lưu trong PDF cần được sắp xếp lại
+	Moves only what must move	Chỉ di chuyển những gì cần thiết
+	Every field calculates after the fields it reads.	Mọi trường đều được tính sau các trường mà nó đọc.
+	Every field outside a loop calculates after the fields it reads.	Mọi trường ngoài vòng lặp đều được tính sau các trường mà nó đọc.
+	{field} reads its own value	{field} đọc chính giá trị của nó
+	{fields} read each other	{fields} đọc lẫn nhau
+	No order can fix a loop. Change one of the formulas.	Không thứ tự nào sửa được vòng lặp. Hãy thay đổi một trong các công thức.
+	Edit {field}'s formula	Sửa công thức của {field}
+	Order · top calculates first	Thứ tự · trên cùng được tính trước
+	Script	Tập lệnh
+	Links on page	Liên kết trên trang
+	Show on the page which fields each field reads	Hiện trên trang các trường mà mỗi trường đọc
+	Drag a field to move it, or select it and press {up} or {down}.	Kéo một trường để di chuyển, hoặc chọn nó rồi nhấn {up} hoặc {down}.
 	Layers	Các lớp
 	Layers Panel and Page	Bảng Các lớp và trang
 	Layout and Magnification	Bố cục và độ phóng đại
@@ -2271,6 +2301,7 @@ comment menu	Edit	Sửa
 	Set status Rejected	Đặt trạng thái Đã từ chối
 	Set status Unmarked	Đặt trạng thái Chưa đánh dấu
 	Set tab order	Đặt thứ tự tab
+	Set calculation order	Đặt thứ tự tính toán
 	Set the image of {name}	Đặt hình ảnh của {name}
 	Shadings	Chuyển sắc
 	Show a field	Hiện một trường
@@ -2588,6 +2619,13 @@ certificate	SHA-256 digest	Giá trị băm SHA-256
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} tên trường trùng với các tệp trước và sẽ được đổi tên: {list}
 @plural	{n} object selected|{n} objects selected	Đã chọn {n} đối tượng
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Đã tải xuống {n} PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} phép tính giờ dùng tên mới.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Thứ tự tính toán có {n} mục không tính gì. "Sửa thứ tự" sẽ xóa chúng.
+@plural	{fields} reads it|{fields} read it	{fields} đọc nó
+@plural	{n} field shows an old value|{n} fields show old values	{n} trường hiển thị giá trị cũ
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} được tính trước {fields} mà nó đọc.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Còn {n} trường khác được tính quá sớm.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} không có trong thứ tự lưu trong PDF, nên các trình xem PDF khác có thể không tính.
 key	Ctrl	Ctrl
 key	Shift	Shift
 key	Delete	Delete
