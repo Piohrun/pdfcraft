@@ -502,8 +502,9 @@ fn line_ends_at(s: &[u8], j: usize) -> bool {
 /// never ends; a comment that never ends runs to the end of the script.
 fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
     let s = js.as_bytes();
-    // Bytes past ASCII are parts of identifiers, so a range never ends inside a character.
-    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || !b.is_ascii();
+    // Whether `s[j]` is part of a word. Bytes past ASCII are parts of identifiers, except
+    // U+2028 and U+2029, which end a line: a range never ends inside a character.
+    let word = |j: usize| s.get(j).is_some_and(|&b| b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || !b.is_ascii()) && !line_ends_at(s, j);
     let mut out: Vec<Token> = Vec::new();
     let mut comments = Vec::new();
     let mut i = 0;
@@ -521,7 +522,8 @@ fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                 i += 1;
                 continue;
             }
-            // U+2028 or U+2029: as bytes past ASCII, it would otherwise start a word.
+            // U+2028 or U+2029 between tokens ends a line, and is skipped whole: read a byte at a
+            // time, the rest of it would be read from inside the character.
             0xE2 if line_ends_at(s, i) => {
                 i += 3;
                 continue;
@@ -584,7 +586,7 @@ fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                 match end {
                     Some(e) => {
                         i = e + 1;
-                        while s.get(i).is_some_and(|b| word(*b)) {
+                        while word(i) {
                             i += 1;
                         }
                         Js::Other
@@ -597,13 +599,13 @@ fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                 }
             }
             _ if c.is_ascii_digit() => {
-                while s.get(i).is_some_and(|b| word(*b) || *b == b'.') {
+                while word(i) || s.get(i) == Some(&b'.') {
                     i += 1;
                 }
                 Js::Other
             }
-            _ if word(c) => {
-                while s.get(i).is_some_and(|b| word(*b)) {
+            _ if word(i) => {
+                while word(i) {
                     i += 1;
                 }
                 Js::Ident
@@ -1613,6 +1615,17 @@ mod tests {
             assert_eq!(rename_in_calculation(&script, "a", "qty"), Some(script.replace("\"a\"", "\"qty\"")), "{end:?}");
             let divides = format!("var n = i++ / 2;{end}event.value = getField(\"a\").value / 4;");
             assert_eq!(rename_in_calculation(&divides, "a", "qty"), Some(divides.replace("\"a\"", "\"qty\"")), "{end:?}");
+        }
+    }
+
+    /// U+2028 and U+2029 end a word, a number or a regular expression's flags, though as bytes
+    /// past ASCII they could be part of one, so a `getField` right after one is still a call.
+    #[test]
+    fn a_token_ends_at_a_line_separator() {
+        for end in ["\u{2028}", "\u{2029}"] {
+            let scripts = ["x", "1", "/r/g"].map(|token| format!("var t = {token}{end}getField(\"a\").value;"));
+            let renamed = scripts.clone().map(|js| rename_in_calculation(&js, "a", "qty"));
+            assert_eq!(renamed, scripts.map(|js| Some(js.replace("\"a\"", "\"qty\""))), "{end:?}");
         }
     }
 
