@@ -113,11 +113,12 @@ fn calculate_arg(v: &Value) -> Result<Calculate> {
         return Ok(Calculate::None);
     }
     let o = v.as_object().ok_or_else(|| bad("calculate must be {\"op\": …, \"fields\": […]}, {\"notation\": …} or \"none\""))?;
-    if let Some(n) = o.get("notation").and_then(Value::as_str) {
-        return Ok(Calculate::Notation(n.to_string()));
-    }
+    // Before anything else is read, so a script given beside a notation isn't dropped unnoticed.
     if o.contains_key("script") {
         return Err(bad("a custom calculate script is set with form_set_script (event: calculate)"));
+    }
+    if let Some(n) = o.get("notation").and_then(Value::as_str) {
+        return Ok(Calculate::Notation(n.to_string()));
     }
     let op = match o.get("op").and_then(Value::as_str).unwrap_or("") {
         "sum" => CalcOp::Sum,

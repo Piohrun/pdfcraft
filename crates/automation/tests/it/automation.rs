@@ -4662,9 +4662,12 @@ fn the_calculation_order_shows_formulas_and_what_they_cannot_read() {
     let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
     let tax = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "tax").unwrap();
     assert_eq!(tax["calculate"], json!({ "script": script }));
-    // A script is set with form_set_script, and form_set_props says so.
-    let e = err(&mut a, "form_set_props", json!({ "doc": doc, "field": "tax", "calculate": { "script": script } }));
-    assert!(e.to_string().contains("form_set_script"), "{e}");
+    // A script is set with form_set_script, and form_set_props says so, also when a notation
+    // comes with it.
+    for calculate in [json!({ "script": script }), json!({ "notation": "qty * 2", "script": script })] {
+        let e = err(&mut a, "form_set_props", json!({ "doc": doc, "field": "tax", "calculate": calculate }));
+        assert!(e.to_string().contains("form_set_script"), "{calculate}: {e}");
+    }
 }
 
 #[test]
