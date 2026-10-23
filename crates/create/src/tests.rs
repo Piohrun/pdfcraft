@@ -1429,8 +1429,8 @@ fn exported_white(png_data: &[u8]) -> Vec<bool> {
 }
 
 /// Export ▸ Images reads CCITT fax images: a page created from a 1-bit PNG (Group 4 now) exports as
-/// the picture, as does the picture coded the other way round with /BlackIs1. One whose /Columns
-/// aren't its width is skipped, not misread.
+/// the picture, as does the picture coded the other way round with /BlackIs1, and the picture with
+/// its filter and parameters in arrays. One whose /Columns aren't its width is skipped, not misread.
 #[test]
 fn ccitt_fax_images_export_as_their_picture() {
     use png::{BitDepth, ColorType};
@@ -1469,6 +1469,15 @@ fn ccitt_fax_images_export_as_their_picture() {
     doc.set(r, Object::Stream(stream));
     let out = extract_images(&doc, &[0], 0);
     assert_eq!(exported_white(&out.images[0].data), picture, "BlackIs1");
+
+    let mut stream = with(false, i64::from(w), pdfcraft_filters::encode_g4(&bits, w, h).unwrap());
+    let parms = stream.dict.get(b"DecodeParms").cloned().unwrap();
+    stream.dict.set(b"DecodeParms".to_vec(), Object::Array(vec![parms]));
+    stream.dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("CCITTFaxDecode")]));
+    doc.set(r, Object::Stream(stream));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(exported_white(&out.images[0].data), picture, "in arrays");
 
     let stream = with(false, i64::from(w) + 8, pdfcraft_filters::encode_g4(&bits, w, h).unwrap());
     doc.set(r, Object::Stream(stream));

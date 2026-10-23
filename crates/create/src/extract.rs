@@ -1,7 +1,7 @@
 //! Export a PDF ▸ Image ▸ Export all images, and Edit ▸ Save image as: the images that pages
 //! use, as files. JPEG images are written unchanged; other images, and JPEG images with
 //! transparency or with CMYK samples a viewer would read inverted, are decoded and written as PNG with their soft mask, stencil mask or colour
-//! key as alpha. Images PdfCraft can't decode yet (JPEG 2000, JBIG2, CCITT, separations) are
+//! key as alpha. Images PdfCraft can't decode yet (JPEG 2000, JBIG2, separations) are
 //! reported, never silently left out.
 
 use std::collections::HashSet;
@@ -110,6 +110,19 @@ fn decoded(doc: &Document, s: &Stream) -> Result<Vec<u8>, String> {
     }
 }
 
+/// The `/DecodeParms` of a stream with one filter: a dictionary, or the one in an array (7.4.2).
+fn decode_parms(doc: &Document, s: &Stream) -> Dict {
+    let Some(p) = s.dict.get(b"DecodeParms").map(|p| doc.resolve(p)) else { return Dict::default() };
+    let p = match &*p {
+        Object::Array(a) => match a.first() {
+            Some(first) => doc.resolve(first),
+            None => return Dict::default(),
+        },
+        _ => p,
+    };
+    p.as_dict().cloned().unwrap_or_default()
+}
+
 /// [`decoded`] for a CCITT fax image, with its `/DecodeParms` (Table 11 defaults). `/Columns` has to
 /// be the image's width; pixels past it and rows past the image's height are dropped, so the output
 /// is bounded by the size the caller already checked. A stream that ends early gives fewer rows,
@@ -151,7 +164,7 @@ fn ccitt(doc: &Document, s: &Stream) -> Result<Vec<u8>, String> {
             self.x = 0;
         }
     }
-    let p = s.dict.get(b"DecodeParms").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()).unwrap_or_default();
+    let p = decode_parms(doc, s);
     let flag = |key: &[u8], default: bool| match p.get(key).map(|v| doc.resolve(v)).as_deref() {
         Some(Object::Bool(b)) => *b,
         _ => default,
