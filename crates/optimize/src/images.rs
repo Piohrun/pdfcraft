@@ -461,6 +461,59 @@ fn mono(doc: &Document, s: &Stream, compression: MonoCompression) -> Option<Stre
     (crate::stored_len(&new)? < crate::stored_len(s)?).then_some(new)
 }
 
+/// An eight-bit grey image whose every sample is 0 or 255, stored at one bit per pixel and then as
+/// `compression` asks (see [`mono`]), if that is smaller as stored. Lossless: a decode array maps
+/// 0 and 255 at eight bits as it maps 0 and 1 at one bit, so it stays. Left alone: indexed images
+/// (their samples are palette indices), a colour-key `/Mask` (its ranges are in eight-bit values),
+/// and everything when `compression` is Retain.
+fn bilevel_grey(doc: &Document, s: &Stream, compression: MonoCompression) -> Option<Stream> {
+    if compression == MonoCompression::Retain {
+        return None;
+    }
+    let d = &s.dict;
+    let indexed = |cs: &Object| match &*doc.resolve(cs) {
+        Object::Array(a) => matches!(a.first().and_then(Object::as_name), Some(b"Indexed" | b"I")),
+        _ => false,
+    };
+    let colour_key = d.get(b"Mask").is_some_and(|m| doc.resolve(m).as_array().is_some());
+    if d.int(b"BitsPerComponent") != Some(8)
+        || matches!(d.get(b"ImageMask"), Some(Object::Bool(true)))
+        || colour_key
+        || !d.get(b"ColorSpace").is_some_and(|cs| one_component(doc, cs) && !indexed(cs))
+    {
+        return None;
+    }
+    // Through u32 first, as everywhere here, so the product can't overflow.
+    let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
+    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PIXELS {
+        return None;
+    }
+    let (w, h) = (usize::try_from(w).ok()?, usize::try_from(h).ok()?);
+    let samples = s.decoded().ok()?;
+    let samples = samples.get(..w.checked_mul(h)?)?;
+    let stride = w.div_ceil(8);
+    let mut packed = vec![0u8; stride.checked_mul(h)?];
+    for (i, v) in samples.iter().enumerate() {
+        match v {
+            0 => {}
+            255 => {
+                if let Some(b) = packed.get_mut((i / w) * stride + (i % w) / 8) {
+                    *b |= 0x80 >> (i % w % 8);
+                }
+            }
+            _ => return None,
+        }
+    }
+    let mut one_bit = d.clone();
+    for k in [&b"Filter"[..], b"DecodeParms", b"Length", b"DL"] {
+        one_bit.remove(k);
+    }
+    one_bit.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    let one_bit = Stream::flate(one_bit, &packed);
+    let best = mono(doc, &one_bit, compression).unwrap_or(one_bit);
+    (crate::stored_len(&best)? < crate::stored_len(s)?).then_some(best)
+}
+
 pub(crate) fn run(
     doc: &mut Document,
     pages: &[ObjRef],
@@ -487,7 +540,7 @@ pub(crate) fn run(
         let obj = doc.get(r);
         let Object::Stream(s) = &*obj else { continue };
         report.images += 1;
-        if let Some(new) = mono(doc, s, settings.mono) {
+        if let Some(new) = mono(doc, s, settings.mono).or_else(|| bilevel_grey(doc, s, settings.mono)) {
             report.image_bytes_before += s.raw.len();
             report.image_bytes_after += new.raw.len();
             report.images_recompressed += 1;

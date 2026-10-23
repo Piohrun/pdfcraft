@@ -407,6 +407,76 @@ fn images_whose_decode_parms_are_references_come_out_as_with_them_direct() {
     assert_eq!(build(true), build(false));
 }
 
+/// Eight-bit samples (0 or 255) from rows of one-bit ones.
+fn eight_bit(bits: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let stride = (w as usize).div_ceil(8);
+    (0..h as usize).flat_map(|y| (0..w as usize).map(move |x| if bits[y * stride + x / 8] & (0x80 >> (x % 8)) != 0 { 255 } else { 0 })).collect()
+}
+
+/// Eight-bit grey images of only black and white (as some scanners and converters write scans)
+/// become one-bit Group 4, losslessly: the page looks the same, an inverting decode array
+/// included. Not touched by this: a grey image with any other shade, an indexed image (its samples
+/// are palette indices), one masked by colour key, and everything with `mono: Retain`.
+#[test]
+fn eight_bit_black_and_white_images_become_one_bit() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200, 480);
+    let grey = eight_bit(&bilevel(w, h, false), w, h);
+    let image = |doc: &mut Document, data: &[u8], entries: &[(&str, Object)]| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w as i64));
+        d.set(b"Height".to_vec(), Object::Int(h as i64));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        for (k, v) in entries {
+            d.set(k.as_bytes().to_vec(), v.clone());
+        }
+        doc.add(Object::Stream(Stream::flate(d, data)))
+    };
+    let gray_cs = ("ColorSpace", Object::name("DeviceGray"));
+    let plain = image(&mut doc, &grey, std::slice::from_ref(&gray_cs));
+    let decode = Object::Array(vec![1.into(), 0.into()]);
+    let inverted = image(&mut doc, &grey, &[gray_cs.clone(), ("Decode", decode.clone())]);
+    let mut shaded = grey.clone();
+    shaded[1000] = 128;
+    let shade = image(&mut doc, &shaded, std::slice::from_ref(&gray_cs));
+    let palette = Object::Array(vec![
+        Object::name("Indexed"),
+        Object::name("DeviceGray"),
+        255.into(),
+        Object::String(pdfcraft_cos::PdfString::literal((0..=255u8).rev().collect::<Vec<_>>())),
+    ]);
+    let indexed = image(&mut doc, &grey, &[("ColorSpace", palette)]);
+    let keyed = image(&mut doc, &grey, &[gray_cs, ("Mask", Object::Array(vec![0.into(), 0.into()]))]);
+    page(
+        &mut doc,
+        &[("A", plain), ("B", inverted), ("C", shade), ("D", indexed), ("E", keyed)],
+        "q 300 0 0 120 20 660 cm /A Do Q q 300 0 0 120 320 660 cm /B Do Q q 300 0 0 120 20 520 cm /C Do Q \
+         q 300 0 0 120 320 520 cm /D Do Q q 300 0 0 120 20 380 cm /E Do Q",
+    );
+    let before = render(&doc);
+    let raw = |doc: &Document, r: ObjRef| stream(doc, r).raw;
+    // Grey settings that leave grey images alone, so only this conversion acts.
+    let keep = ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain };
+    let settings = Settings { gray: keep, ..Settings::default() };
+
+    let mut kept = doc.clone();
+    let r = optimize(&mut kept, &Settings { mono: MonoCompression::Retain, ..settings.clone() }).unwrap();
+    assert_eq!(r.images_recompressed, 0, "Retain keeps every image as it is");
+
+    let untouched = [shade, indexed, keyed].map(|r| raw(&doc, r));
+    let r = optimize(&mut doc, &settings).unwrap();
+    assert_eq!(r.images_recompressed, 2);
+    for i in [plain, inverted] {
+        let s = stream(&doc, i);
+        assert_eq!((s.dict.int(b"BitsPerComponent"), s.dict.name(b"Filter")), (Some(1), Some(&b"CCITTFaxDecode"[..])));
+    }
+    assert_eq!(stream(&doc, inverted).dict.get(b"Decode"), Some(&decode), "the decode array stays");
+    assert_eq!([shade, indexed, keyed].map(|r| raw(&doc, r)), untouched);
+    assert!(render(&doc) == before, "the page looks the same");
+}
+
 #[test]
 fn settings_choose_what_happens() {
     let mut doc = Document::new_empty();
