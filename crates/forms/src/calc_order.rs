@@ -17,6 +17,9 @@ const MAX_LINKS: usize = 1 << 20;
 pub struct CalculatedField {
     /// The field's full name.
     pub name: String,
+    /// The field object. Two calculated fields can share a name in a malformed form; this tells
+    /// them apart.
+    pub obj: ObjRef,
     /// The fields its formula reads, each once, as the formula names them: a name also stands for
     /// the fields under it. A script's names built at run time (`getField("row" + i)`) aren't here.
     pub reads: Vec<String>,
@@ -184,7 +187,7 @@ pub fn calculation_order(doc: &Document, fields: &[Field]) -> CalculationOrder {
         if f.actions.scripts.calculate.as_deref().is_some_and(crate::af::reads_built_names) {
             issues.push(CalculationIssue::BuiltNames);
         }
-        out.push(CalculatedField { name: f.name.clone(), reads, listed: *listed, issues });
+        out.push(CalculatedField { name: f.name.clone(), obj: f.obj, reads, listed: *listed, issues });
     }
     let fixed = fixed_order(&links, &component);
     CalculationOrder { fields: out, extra, fixed }

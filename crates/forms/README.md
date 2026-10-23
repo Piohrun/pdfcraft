@@ -80,7 +80,8 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   left alone. `calculations_changed` compares two readings of a form to say which formulas an
   edit rewrote.
 - The calculation order (`/CO`, §12.7.3): `calculation_order` lists the calculated fields in the
-  order `recalculate` runs them, with the fields each formula reads (`Calculate::reads`,
+  order `recalculate` runs them, each with its field object (two can share a name in a malformed
+  form), with the fields each formula reads (`Calculate::reads`,
   `af::calculation_reads`; names built at run time aren't known) and what is wrong with the
   order: a field reading one that calculates later, a loop, a field `/CO` leaves out, and `/CO`
   entries that calculate nothing. Two issues are about the formula itself: it reads a field the

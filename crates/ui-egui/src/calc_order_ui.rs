@@ -141,16 +141,14 @@ fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect()
 }
 
-/// Each calculated field's value, formula and standing, in the order's order.
+/// Each calculated field's value, formula and standing, in the order's order. Fields are found by
+/// their object, not their name: two calculated fields can share a name in a malformed form.
 fn rows(calculated: &[CalculatedField], form: &[FormField]) -> Vec<Row> {
-    let mut by_name: HashMap<&str, &FormField> = HashMap::with_capacity(form.len());
-    for f in form {
-        by_name.entry(f.name.as_str()).or_insert(f);
-    }
+    let by_obj: HashMap<_, &FormField> = form.iter().map(|f| (f.obj, f)).collect();
     calculated
         .iter()
         .map(|c| {
-            let field = by_name.get(c.name.as_str());
+            let field = by_obj.get(&c.obj);
             let value = match field {
                 Some(f) if f.kind == FormFieldKind::Text => f.value.first().map(|v| format_value(&f.actions.format, v)).unwrap_or_default(),
                 Some(f) => f.display_value(),
@@ -453,6 +451,11 @@ fn cards(ui: &mut egui::Ui, t: &Tokens, pal: &Palette, order: &CalculationOrder,
             {
                 act = Some(Act::EditFormula((*first).to_owned()));
             }
+            // The all-clear, which carries Undo after a reorder, stays hidden while a formula is
+            // broken, so Undo is offered here.
+            if undo && text_button(ui, tl!("Undo"), t) {
+                act = Some(Act::Undo);
+            }
         });
         ui.add_space(6.0);
     }
@@ -505,7 +508,7 @@ fn cards(ui: &mut egui::Ui, t: &Tokens, pal: &Palette, order: &CalculationOrder,
                 ui.add(egui::Label::new(egui::RichText::new(tl!("Moves only what must move")).font(theme::regular(11.5)).color(t.text_muted)).wrap());
             });
         });
-    } else if missing.is_empty() || undo {
+    } else if missing.is_empty() {
         let (fill, edge, colour) = pal.good;
         card(ui, fill, edge, |ui| {
             let said = if loops.is_empty() {
@@ -969,7 +972,8 @@ mod tests {
     use super::*;
 
     fn field(name: &str, reads: &[&str], issues: Vec<CalculationIssue>) -> CalculatedField {
-        CalculatedField { name: name.into(), reads: reads.iter().map(|r| (*r).to_owned()).collect(), listed: true, issues }
+        let obj = pdfcraft_cos::ObjRef { num: 0, generation: 0 };
+        CalculatedField { name: name.into(), obj, reads: reads.iter().map(|r| (*r).to_owned()).collect(), listed: true, issues }
     }
 
     #[test]

@@ -1565,6 +1565,12 @@ fn two_fields_with_one_name_keep_their_places_in_the_order() {
     };
     let row = |name: &str, reads: &str, ok: bool| (name.to_owned(), vec![reads.to_owned()], ok);
     assert_eq!(rows(&doc), [row("dup", "src", false), row("src", "x", true), row("dup", "x", true)]);
+    // Each row is its own field object, so a caller can find the right formula for each dup.
+    let all = fields(&doc);
+    for c in calculation_order(&doc, &all).fields {
+        let f = all.iter().find(|f| f.obj == c.obj).unwrap();
+        assert_eq!((&f.name, f.actions.calculate.reads()), (&c.name, c.reads.clone()));
+    }
     let current: Vec<String> = ["dup", "src", "dup"].map(String::from).into();
     set_calculation_order(&mut doc, &current).unwrap();
     assert_eq!(rows(&doc), [row("dup", "src", false), row("src", "x", true), row("dup", "x", true)], "the current order sets back unchanged");

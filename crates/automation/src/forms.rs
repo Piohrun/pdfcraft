@@ -644,11 +644,9 @@ impl Automation {
             CalculationIssue::NotInOrder => json!({ "issue": "not_in_order" }),
             CalculationIssue::BuiltNames => json!({ "issue": "built_names" }),
         };
+        // By field object, not name: two calculated fields can share a name in a malformed form.
         let doc = self.doc(a)?;
-        let mut by_name: std::collections::HashMap<&str, &FormField> = std::collections::HashMap::with_capacity(doc.form.len());
-        for f in doc.form.iter() {
-            by_name.entry(f.name.as_str()).or_insert(f);
-        }
+        let by_obj: std::collections::HashMap<_, &FormField> = doc.form.iter().map(|f| (f.obj, f)).collect();
         out["calculation_order"] = json!(order.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>());
         out["fields"] = order
             .fields
@@ -656,7 +654,7 @@ impl Automation {
             .map(|f| {
                 json!({
                     "name": f.name,
-                    "formula": by_name.get(f.name.as_str()).and_then(|x| calculate_json(x)),
+                    "formula": by_obj.get(&f.obj).and_then(|x| calculate_json(x)),
                     "reads": f.reads,
                     "listed": f.listed,
                     "issues": f.issues.iter().map(issue).collect::<Vec<_>>(),
