@@ -63,8 +63,9 @@ flate2 = { version = "1.1", default-features = false, features = ["rust_backend"
 weezl = "0.2"
 # CCITT Group 4 encoding (pdfcraft-filters); already in the tree through tiff.
 fax = "0.2.7"
-# An independent CCITT decoder, for round-trip tests; already in the tree through hayro.
+# Independent CCITT and JBIG2 decoders, for round-trip tests; already in the tree through hayro.
 hayro-ccitt = "0.3"
+hayro-jbig2 = "0.3"
 
 # foundation
 thiserror = "2"

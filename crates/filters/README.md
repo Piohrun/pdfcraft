@@ -3,7 +3,7 @@
 PDF stream filters: the decoders and encoders behind `/Filter` and `/DecodeParms`.
 
 - **Layer:** L0, standalone. No dependency on any other PdfCraft crate. `cos` depends on it (architecture §3 rule 3).
-- **Licence:** MIT OR Apache-2.0. Clean-room: written from ISO 32000-2 §7.4, RFC 1950/1951 (through `flate2` with the pure-Rust `miniz_oxide` backend), TIFF 6.0 §14 (predictor 2) and RFC 2083 §6 (PNG filters). CCITT Group 4 encoding (ITU-T T.6) is the `fax` crate's (MIT, already in the tree through `tiff`), checked here by round trips through an independent decoder.
+- **Licence:** MIT OR Apache-2.0. Clean-room: written from ISO 32000-2 §7.4, RFC 1950/1951 (through `flate2` with the pure-Rust `miniz_oxide` backend), TIFF 6.0 §14 (predictor 2) and RFC 2083 §6 (PNG filters). CCITT Group 4 encoding (ITU-T T.6) is the `fax` crate's (MIT, already in the tree through `tiff`), checked here by round trips through an independent decoder. JBIG2 generic region encoding is written here from the JBIG committee's ISO/IEC 14492 Final Committee Draft (WG1 N1359, 1999), the public draft of ITU-T T.88; its Annex H.2 test sequence checks the arithmetic coder byte for byte.
 - `#![forbid(unsafe_code)]`. Builds for `wasm32-unknown-unknown`.
 
 ## API
@@ -23,6 +23,7 @@ decode_tolerant_counted(chain, data, max_output) -> Result<(Vec<u8>, bool /*part
 encode(filter, params, data) -> Result<Vec<u8>, FilterError>
 encode_flate(data) -> Vec<u8>   // zlib, level 6
 encode_g4(data, columns, rows) -> Result<Vec<u8>, FilterError>   // 1-bit rows as CCITT Group 4; columns <= MAX_G4_COLUMNS
+encode_jbig2_generic(data, columns, rows) -> Result<Vec<u8>, FilterError>   // 1-bit rows as lossless JBIG2 for JBIG2Decode; columns <= MAX_JBIG2_COLUMNS
 ```
 
 - `chain` is applied first to last, as in a `/Filter` array.
@@ -42,6 +43,7 @@ encode_g4(data, columns, rows) -> Result<Vec<u8>, FilterError>   // 1-bit rows a
 | ASCII85Decode | `<~` prefix, `z`, white space, `~>` (or bare `~`, or none) EOD, final partial group; `z` inside a group, a 1-char final group, overflow or bad characters → Corrupt | `z` for zero groups, newline every 75 characters, `~>` |
 | RunLengthDecode | 0–127 literal, 129–255 repeat, 128 EOD (optional); truncated run → Corrupt | runs of ≥2 repeat, literals up to 128, 128 |
 | CCITTFaxDecode | not here (`Unsupported`; renderers decode it) | `encode_g4`: Group 4 (`/K -1`) with an end-of-block mark, 0 bits coded black so `/BlackIs1 false` decodes the same bits; rows packed MSB first, each on a new byte, padding bits and trailing bytes ignored; up to 32,767 samples a row (the encoder counts positions in 16 bits); no rows or columns, or too wide → Unsupported, too few bytes → Corrupt |
+| JBIG2Decode | not here (`Unsupported`; renderers decode it) | `encode_jbig2_generic`: the embedded organisation (D.3) with a page information segment and an immediate lossless generic region (7.4.6), no `/JBIG2Globals`; template 0 with its nominal AT pixels and typical prediction (6.2.5), coded with the MQ arithmetic coder (Annex E, Table E.1) and ended by its 0xFF 0xAC marker. A 0 sample is coded as a JBIG2 1 (black), since `JBIG2Decode` gives black as 0, so the stream decodes to the same bits; rows packed MSB first, each on a new byte, padding bits and trailing bytes ignored; up to 1,048,576 samples a row; no rows or columns, or too wide → Unsupported, too few bytes → Corrupt |
 
 ## Tests
 
@@ -49,8 +51,10 @@ encode_g4(data, columns, rows) -> Result<Vec<u8>, FilterError>   // 1-bit rows a
 - LZW is cross-checked against `weezl` (dev-dependency) in both directions for both early-change settings.
 - `tests/proptests.rs`: encode→decode round trips for every encodable filter × predictor × colors × bpc × columns, two-filter chains, output-limit checks, and fuzz-style no-panic tests (random bytes, random/nonsense params, bit-flipped valid streams).
 - `ccitt.rs`: Group 4 output decoded by `hayro-ccitt` (dev-dependency, an independent decoder) matches the input bits: a text-like page, padding bits, the widest row, and property tests over bitmaps of noise and of runs; any input returns rather than panics.
+- `mq.rs`: the arithmetic coder reproduces Annex H.2's 30 bytes from its 256 decisions.
+- `jbig2.rs`: output decoded by `hayro-jbig2` (dev-dependency, an independent decoder) matches the input bits: a text-like page (smaller than Group 4), edges, padding, all-white and all-black regions (typical rows), and property tests over bitmaps of noise and of runs; any input returns rather than panics.
 - `fuzz/`: a detached cargo-fuzz crate (`cargo +nightly fuzz run decode`, run from `crates/filters/`).
 
 ## Status
 
-M1.1/M1.2 for the general-purpose filters are done. Not yet here: the image codecs (DCT via zune-jpeg, JPX via hayro-jpeg2000, JBIG2, CCITT G3/G4 decode, DCT encode), CCITT Group 3 encoding and Flate encode levels other than 6.
+M1.1/M1.2 for the general-purpose filters are done. Not yet here: the image codecs (DCT via zune-jpeg, JPX via hayro-jpeg2000, JBIG2 and CCITT decode, DCT encode), CCITT Group 3 encoding, JBIG2 symbol coding (text regions, symbol dictionaries, lossy) and Flate encode levels other than 6.

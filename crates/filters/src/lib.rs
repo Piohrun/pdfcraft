@@ -18,13 +18,16 @@ mod ascii85;
 mod asciihex;
 mod ccitt;
 mod flate;
+mod jbig2;
 mod lzw;
+mod mq;
 mod predictor;
 mod runlength;
 
 use std::borrow::Cow;
 
 pub use ccitt::{MAX_G4_COLUMNS, encode_g4};
+pub use jbig2::{MAX_JBIG2_COLUMNS, encode_jbig2_generic};
 
 /// A PDF stream filter, identified by its `/Filter` name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

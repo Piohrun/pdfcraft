@@ -5784,6 +5784,30 @@ fn scanned_page() -> Vec<u8> {
     write_full(&doc, &SaveOptions::default()).unwrap()
 }
 
+/// With `mono: { compression: jbig2 }` a scan's black-and-white image is stored as lossless JBIG2,
+/// smaller than as Group 4.
+#[test]
+fn doc_optimize_stores_black_and_white_images_as_jbig2() {
+    let dir = workdir("optimize-jbig2");
+    std::fs::write(dir.join("scan.pdf"), scanned_page()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "scan.pdf" }))["doc"].as_u64().unwrap();
+    let g4 = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "g4.pdf" }));
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "jbig2.pdf", "mono": { "compression": "jbig2" } }));
+    assert_eq!((r["images"].as_u64(), r["images_recompressed"].as_u64()), (Some(1), Some(1)), "{r}");
+    assert!(r["image_bytes_after"].as_u64() < g4["image_bytes_after"].as_u64(), "JBIG2 {r}, Group 4 {g4}");
+    let written = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("jbig2.pdf")).unwrap())).unwrap();
+    let filters: Vec<Vec<u8>> = written
+        .object_numbers()
+        .into_iter()
+        .filter_map(|num| match &*written.get(pdfcraft_cos::ObjRef { num, generation: written.generation(num) }) {
+            pdfcraft_cos::Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => s.dict.name(b"Filter").map(<[u8]>::to_vec),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(filters, [b"JBIG2Decode".to_vec()]);
+}
+
 /// A scan's black-and-white image is stored as CCITT Group 4 by default, and kept as it is with
 /// `mono: { compression: retain }`.
 #[test]
@@ -5810,7 +5834,7 @@ fn doc_optimize_stores_black_and_white_images_as_ccitt_group_4() {
     assert_eq!(filters, [b"CCITTFaxDecode".to_vec()]);
     // An unknown compression, one that isn't a name, a misspelled key, or a mono that isn't an
     // object is refused, not read as the default.
-    for mono in [json!({ "compression": "jbig2" }), json!({ "compression": false }), json!({ "compresson": "retain" }), json!("retain")] {
+    for mono in [json!({ "compression": "jpeg" }), json!({ "compression": false }), json!({ "compresson": "retain" }), json!("retain")] {
         assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "mono": mono })), Err(ToolError::InvalidArgs(_))), "{mono}");
     }
 }

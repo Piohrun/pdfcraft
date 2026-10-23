@@ -10,7 +10,7 @@
 //!   A new image replaces the old one only if it is smaller. Images PdfCraft can't decode
 //!   faithfully (CMYK and other colour spaces, masks, decode arrays other than the default,
 //!   JPEG 2000, JBIG2, CCITT, other than 8 bits) are left alone. Black-and-white (1-bit) images
-//!   are stored again as CCITT Group 4, losslessly, when that is smaller.
+//!   are stored again as CCITT Group 4 or JBIG2, losslessly, when that is smaller.
 //! - **Discard objects:** page thumbnails, alternate images, document tags (structure tree),
 //!   print settings.
 //! - **Clean up:** drop images and forms that pages list but never draw (such as a deleted
@@ -72,6 +72,9 @@ pub enum Compression {
 pub enum MonoCompression {
     /// CCITT Group 4 (lossless), when smaller than the image as it is.
     CcittG4,
+    /// JBIG2, lossless (a generic region), when smaller than the image as it is. JBIG2Decode is
+    /// PDF 1.4: an older document gets `/Version /1.4` in its catalog.
+    Jbig2,
     /// Keep each image's own compression.
     Retain,
 }

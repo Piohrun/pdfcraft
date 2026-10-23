@@ -2577,6 +2577,7 @@ version = "0.3.0"
 dependencies = [
  "fearless_simd",
  "hayro-ccitt",
+ "image",
 ]
 
 [[package]]
@@ -4159,6 +4160,7 @@ dependencies = [
  "fax",
  "flate2",
  "hayro-ccitt",
+ "hayro-jbig2",
  "proptest",
  "thiserror 2.0.21",
  "weezl 0.2.1",

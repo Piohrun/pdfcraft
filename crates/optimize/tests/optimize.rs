@@ -407,6 +407,67 @@ fn images_whose_decode_parms_are_references_come_out_as_with_them_direct() {
     assert_eq!(build(true), build(false));
 }
 
+/// The images of a document that are images, by object number.
+fn image_refs(doc: &Document) -> Vec<ObjRef> {
+    doc.object_numbers()
+        .into_iter()
+        .map(|num| ObjRef { num, generation: doc.generation(num) })
+        .filter(|r| matches!(&*doc.get(*r), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image")))
+        .collect()
+}
+
+/// Black-and-white images as lossless JBIG2: the page looks the same to the pixel (so
+/// JBIG2Decode gives black as 0, as the encoder assumes), and scan-like text comes out smaller
+/// than as Group 4. JBIG2Decode is PDF 1.4, so a PDF 1.3 document gets `/Version /1.4` in its
+/// catalog.
+#[test]
+fn black_and_white_images_become_jbig2() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200, 480);
+    let text = bilevel(w, h, false);
+    let gray = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let decode = Object::Array(vec![1.into(), 0.into()]);
+    let mask = mono_image(&mut doc, w, h, &text, None, &[("ImageMask", Object::Bool(true)), ("Decode", decode.clone())]);
+    let indexed_cs = Object::Array(vec![
+        Object::name("Indexed"),
+        Object::name("DeviceRGB"),
+        1.into(),
+        Object::String(pdfcraft_cos::PdfString::literal(vec![0xC0, 0x10, 0x10, 0xF8, 0xF0, 0xE0])),
+    ]);
+    let indexed = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", indexed_cs.clone())]);
+    page(
+        &mut doc,
+        &[("G", gray), ("M", mask), ("I", indexed)],
+        "q 300 0 0 120 20 660 cm /G Do Q q 0 0.4 0.8 rg 300 0 0 120 320 660 cm /M Do Q q 300 0 0 120 20 520 cm /I Do Q",
+    );
+    // The same document, as PDF 1.3.
+    let mut bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    bytes[..8].copy_from_slice(b"%PDF-1.3");
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(doc.version(), "1.3");
+    let before = render(&doc);
+
+    let mut g4 = doc.clone();
+    let as_g4 = optimize(&mut g4, &Settings::default()).unwrap();
+    let mut jbig2 = doc.clone();
+    let r = optimize(&mut jbig2, &Settings { mono: MonoCompression::Jbig2, ..Settings::default() }).unwrap();
+    assert_eq!(r.images_recompressed, 3);
+    assert!(r.image_bytes_after < as_g4.image_bytes_after, "JBIG2 {} bytes, Group 4 {}", r.image_bytes_after, as_g4.image_bytes_after);
+    let images: Vec<Stream> = image_refs(&jbig2).into_iter().map(|i| stream(&jbig2, i)).collect();
+    assert_eq!(images.len(), 3);
+    for s in &images {
+        assert_eq!((s.dict.name(b"Filter"), s.dict.contains(b"DecodeParms")), (Some(&b"JBIG2Decode"[..]), false));
+    }
+    assert!(images.iter().any(|s| s.dict.get(b"Decode") == Some(&decode)), "the decode array stays");
+    let indexed_kept =
+        |s: &Stream| s.dict.get(b"ColorSpace").and_then(Object::as_array).and_then(|a| a.first()).and_then(Object::as_name) == Some(b"Indexed");
+    assert!(images.iter().any(indexed_kept), "the colour space stays");
+    let catalog = jbig2.root().and_then(|r| jbig2.get(r).as_dict().cloned()).unwrap();
+    assert_eq!(catalog.name(b"Version"), Some(&b"1.4"[..]));
+    assert!(g4.root().and_then(|r| g4.get(r).as_dict().cloned()).is_some_and(|c| !c.contains(b"Version")), "Group 4 is PDF 1.0");
+    assert!(render(&jbig2) == before, "the page looks the same");
+}
+
 #[test]
 fn settings_choose_what_happens() {
     let mut doc = Document::new_empty();

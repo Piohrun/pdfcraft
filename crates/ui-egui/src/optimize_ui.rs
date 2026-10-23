@@ -150,10 +150,12 @@ fn mono_row(ui: &mut egui::Ui, m: &mut MonoCompression) {
         ui.label(tl!("Compression"));
         let label = match m {
             MonoCompression::CcittG4 => tl!("CCITT Group 4"),
+            MonoCompression::Jbig2 => tl!("JBIG2 (lossless)"),
             MonoCompression::Retain => tl!("Retain existing"),
         };
         egui::ComboBox::from_id_salt(("mono", "compression")).selected_text(label).show_ui(ui, |ui| {
             ui.selectable_value(m, MonoCompression::CcittG4, tl!("CCITT Group 4"));
+            ui.selectable_value(m, MonoCompression::Jbig2, tl!("JBIG2 (lossless)"));
             ui.selectable_value(m, MonoCompression::Retain, tl!("Retain existing"));
         });
     });

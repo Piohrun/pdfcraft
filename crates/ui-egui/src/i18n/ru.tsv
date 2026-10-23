@@ -583,6 +583,7 @@
 	Grayscale Images	Изображения в оттенках серого
 	Monochrome Images	Монохромные изображения
 	CCITT Group 4	CCITT группа 4
+	JBIG2 (lossless)	JBIG2 (без потерь)
 	Bicubic downsampling to	Бикубическое уменьшение до
 	for images above	для изображений выше
 	Compression	Сжатие

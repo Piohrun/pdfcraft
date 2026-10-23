@@ -1250,8 +1250,9 @@ impl Automation {
         settings.color = images("color", settings.color)?;
         settings.gray = images("gray", settings.gray)?;
         if let Some(mono) = a.get("mono") {
-            let unknown = |c: &Value| ToolError::InvalidArgs(format!("unknown mono compression {c} (ccitt_g4, retain)"));
-            let mono = mono.as_object().ok_or_else(|| ToolError::InvalidArgs("mono must be an object: { compression: ccitt_g4|retain }".into()))?;
+            let unknown = |c: &Value| ToolError::InvalidArgs(format!("unknown mono compression {c} (ccitt_g4, jbig2, retain)"));
+            let mono =
+                mono.as_object().ok_or_else(|| ToolError::InvalidArgs("mono must be an object: { compression: ccitt_g4|jbig2|retain }".into()))?;
             // A misspelled key would otherwise leave the preset's setting in place unnoticed.
             if let Some(key) = mono.keys().find(|k| *k != "compression") {
                 return Err(ToolError::InvalidArgs(format!("unknown mono key {key:?} (compression)")));
@@ -1259,6 +1260,7 @@ impl Automation {
             if let Some(c) = mono.get("compression") {
                 settings.mono = match c.as_str() {
                     Some("ccitt_g4" | "ccitt" | "g4") => MonoCompression::CcittG4,
+                    Some("jbig2") => MonoCompression::Jbig2,
                     Some("retain") => MonoCompression::Retain,
                     _ => return Err(unknown(c)),
                 };

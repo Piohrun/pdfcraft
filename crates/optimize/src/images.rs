@@ -421,15 +421,17 @@ fn one_component(doc: &Document, cs: &Object) -> bool {
     }
 }
 
-/// A black-and-white image (one bit per pixel, or an image mask) stored again as CCITT Group 4,
-/// if `compression` asks for that and the result is smaller as stored. Only images whose samples
+/// A black-and-white image (one bit per pixel, or an image mask) stored again as `compression`
+/// asks (CCITT Group 4 or JBIG2), if the result is smaller as stored. Only images whose samples
 /// PdfCraft decodes (no filter, or general-purpose filters: image codecs don't decode here)
 /// qualify. The samples decode to the same bits, so the colour space, decode array and masks stay
 /// as they are.
 fn mono(doc: &Document, s: &Stream, compression: MonoCompression) -> Option<Stream> {
-    if compression != MonoCompression::CcittG4 {
-        return None;
-    }
+    let widest = match compression {
+        MonoCompression::CcittG4 => pdfcraft_filters::MAX_G4_COLUMNS,
+        MonoCompression::Jbig2 => pdfcraft_filters::MAX_JBIG2_COLUMNS,
+        MonoCompression::Retain => return None,
+    };
     let d = &s.dict;
     let bits = d.int(b"BitsPerComponent");
     let qualifies = if matches!(d.get(b"ImageMask"), Some(Object::Bool(true))) {
@@ -441,22 +443,29 @@ fn mono(doc: &Document, s: &Stream, compression: MonoCompression) -> Option<Stre
         return None;
     }
     let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
-    if w == 0 || h == 0 || w > pdfcraft_filters::MAX_G4_COLUMNS || u64::from(w) * u64::from(h) > MAX_PIXELS {
+    if w == 0 || h == 0 || w > widest || u64::from(w) * u64::from(h) > MAX_PIXELS {
         return None;
     }
     // Through its parameters given by reference too, as `pixels` reads.
-    let g4 = pdfcraft_filters::encode_g4(&doc.with_direct_parms(s).decoded().ok()?, w, h).ok()?;
+    let samples = doc.with_direct_parms(s).decoded().ok()?;
     let mut new = d.clone();
     for k in [&b"Filter"[..], b"DecodeParms", b"Length", b"DL"] {
         new.remove(k);
     }
-    let mut parms = Dict::new();
-    parms.set(b"K".to_vec(), Object::Int(-1));
-    parms.set(b"Columns".to_vec(), Object::Int(i64::from(w)));
-    parms.set(b"Rows".to_vec(), Object::Int(i64::from(h)));
-    new.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
-    new.set(b"DecodeParms".to_vec(), Object::Dict(parms));
-    let new = Stream::from_raw(new, g4);
+    let data = if compression == MonoCompression::Jbig2 {
+        // One embedded JBIG2 stream with its own page; no /JBIG2Globals.
+        new.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+        pdfcraft_filters::encode_jbig2_generic(&samples, w, h).ok()?
+    } else {
+        let mut parms = Dict::new();
+        parms.set(b"K".to_vec(), Object::Int(-1));
+        parms.set(b"Columns".to_vec(), Object::Int(i64::from(w)));
+        parms.set(b"Rows".to_vec(), Object::Int(i64::from(h)));
+        new.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+        new.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        pdfcraft_filters::encode_g4(&samples, w, h).ok()?
+    };
+    let new = Stream::from_raw(new, data);
     // Smaller as stored, counting the larger dictionary: a tiny image can lose by it.
     (crate::stored_len(&new)? < crate::stored_len(s)?).then_some(new)
 }
@@ -480,6 +489,7 @@ pub(crate) fn run(
     let mut refs: Vec<(ObjRef, f64)> = ppi.into_iter().filter(|(r, _)| !masks.contains(r)).collect();
     refs.sort_by_key(|(r, _)| r.num);
     let total = refs.len();
+    let mut jbig2 = false;
     for (done, (r, ppi)) in refs.into_iter().enumerate() {
         if !progress(Stage::Images { done, total }) {
             return Err(OptimizeError::Cancelled);
@@ -491,6 +501,7 @@ pub(crate) fn run(
             report.image_bytes_before += s.raw.len();
             report.image_bytes_after += new.raw.len();
             report.images_recompressed += 1;
+            jbig2 |= new.dict.name(b"Filter") == Some(b"JBIG2Decode");
             doc.set(r, Object::Stream(new));
             continue;
         }
@@ -512,6 +523,22 @@ pub(crate) fn run(
     }
     if !progress(Stage::Images { done: total, total }) {
         return Err(OptimizeError::Cancelled);
+    }
+    if jbig2 {
+        at_least_pdf_1_4(doc)?;
+    }
+    Ok(())
+}
+
+/// JBIG2Decode is PDF 1.4: a document whose header says less, and whose catalog doesn't say 1.4
+/// or more already, gets `/Version /1.4` in its catalog (ISO 32000-2 §7.7.2). A full save with
+/// object streams writes a 1.5 header anyway.
+fn at_least_pdf_1_4(doc: &mut Document) -> Result<(), OptimizeError> {
+    let below = |v: &[u8]| v.len() < 3 || v < &b"1.4"[..];
+    let Some(root) = doc.root() else { return Ok(()) };
+    let catalog = doc.get(root).as_dict().and_then(|c| c.name(b"Version").map(<[u8]>::to_vec));
+    if below(doc.version().as_bytes()) && catalog.as_deref().is_none_or(below) {
+        doc.update_dict(root, |c| c.set(b"Version".to_vec(), Object::name("1.4")))?;
     }
     Ok(())
 }
