@@ -5808,10 +5808,11 @@ fn doc_optimize_stores_black_and_white_images_as_ccitt_group_4() {
         })
         .collect();
     assert_eq!(filters, [b"CCITTFaxDecode".to_vec()]);
-    assert!(matches!(
-        a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "mono": { "compression": "jbig2" } })),
-        Err(ToolError::InvalidArgs(_))
-    ));
+    // An unknown compression, one that isn't a name, or a mono that isn't an object is refused,
+    // not read as the default.
+    for mono in [json!({ "compression": "jbig2" }), json!({ "compression": false }), json!("retain")] {
+        assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "mono": mono })), Err(ToolError::InvalidArgs(_))), "{mono}");
+    }
 }
 
 /// A one-page PDF whose page picture is drawn as `rows` grey images one pixel row high, 600 px

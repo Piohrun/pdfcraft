@@ -275,9 +275,9 @@ fn render(doc: &Document) -> Vec<u8> {
 
 /// Black-and-white images become CCITT Group 4, losslessly: the page looks the same to the pixel.
 /// Grey, an image mask (with a decode array that inverts it), an indexed image of two colours and
-/// one stored with a PNG predictor qualify; noise (bigger as G4), a 1-bit RGB image, one wider
-/// than Group 4 encodes and a tiny one (bigger as stored) are left alone, as is everything with
-/// `mono: Retain`.
+/// one stored with a PNG predictor qualify; noise (bigger as G4), a 1-bit RGB image, one whose
+/// colour space is a resource name, one wider than Group 4 encodes and a tiny one (bigger as
+/// stored) are left alone, as is everything with `mono: Retain`.
 #[test]
 fn black_and_white_images_become_ccitt_group_4() {
     let mut doc = Document::new_empty();
@@ -312,20 +312,32 @@ fn black_and_white_images_become_ccitt_group_4() {
         None,
         &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))],
     );
+    // A bare /Indexed is no colour space on its own: it names the page's resource, here RGB, so
+    // these samples are three to a pixel.
+    let named =
+        mono_image(&mut doc, 400, 160, &bilevel(1200, 160, false), None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("Indexed"))]);
     // 64 × 8 white: its Group 4 data is smaller than its Flate data, but not by the longer
     // dictionary Group 4 needs.
     let tiny = mono_image(&mut doc, 64, 8, &[0xFF; 64], None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
     let tiny_g4 = pdfcraft_filters::encode_g4(&[0xFF; 64], 64, 8).unwrap();
     assert!(tiny_g4.len() < stream(&doc, tiny).raw.len(), "{} against {}", tiny_g4.len(), stream(&doc, tiny).raw.len());
-    page(
+    let p = page(
         &mut doc,
-        &[("G", gray), ("M", mask), ("I", indexed), ("P", predicted), ("N", noise), ("R", rgb), ("W", wide), ("T", tiny)],
+        &[("G", gray), ("M", mask), ("I", indexed), ("P", predicted), ("N", noise), ("R", rgb), ("W", wide), ("T", tiny), ("X", named)],
         "q 300 0 0 120 20 660 cm /G Do Q q 0 0.4 0.8 rg 300 0 0 120 320 660 cm /M Do Q q 300 0 0 120 20 520 cm /I Do Q \
-         q 300 0 0 120 320 520 cm /P Do Q q 200 0 0 100 20 400 cm /N Do Q q 200 0 0 80 240 400 cm /R Do Q q 560 0 0 4 20 380 cm /W Do Q q 64 0 0 8 460 400 cm /T Do Q",
+         q 300 0 0 120 320 520 cm /P Do Q q 200 0 0 100 20 400 cm /N Do Q q 200 0 0 80 240 400 cm /R Do Q q 560 0 0 4 20 380 cm /W Do Q q 64 0 0 8 460 400 cm /T Do Q q 200 0 0 80 240 300 cm /X Do Q",
     );
+    doc.update_dict(p, |d| {
+        if let Some(Object::Dict(res)) = d.get_mut(b"Resources") {
+            let mut cs = Dict::new();
+            cs.set(b"Indexed".to_vec(), Object::name("DeviceRGB"));
+            res.set(b"ColorSpace".to_vec(), Object::Dict(cs));
+        }
+    })
+    .unwrap();
     let before = render(&doc);
     let raw = |doc: &Document, r: ObjRef| stream(doc, r).raw;
-    let untouched = [noise, rgb, wide, tiny].map(|r| raw(&doc, r));
+    let untouched = [noise, rgb, wide, tiny, named].map(|r| raw(&doc, r));
 
     let mut kept = doc.clone();
     let r = optimize(&mut kept, &Settings { mono: MonoCompression::Retain, ..Settings::default() }).unwrap();
@@ -343,7 +355,7 @@ fn black_and_white_images_become_ccitt_group_4() {
     }
     assert_eq!(stream(&doc, mask).dict.get(b"Decode"), Some(&decode), "the decode array stays");
     assert_eq!(stream(&doc, indexed).dict.get(b"ColorSpace"), Some(&indexed_cs), "the colour space stays");
-    assert_eq!([noise, rgb, wide, tiny].map(|r| raw(&doc, r)), untouched);
+    assert_eq!([noise, rgb, wide, tiny, named].map(|r| raw(&doc, r)), untouched);
     assert!(render(&doc) == before, "the page looks the same");
 }
 

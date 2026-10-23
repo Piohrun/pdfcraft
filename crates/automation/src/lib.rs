@@ -1249,12 +1249,16 @@ impl Automation {
         };
         settings.color = images("color", settings.color)?;
         settings.gray = images("gray", settings.gray)?;
-        if let Some(c) = a.get("mono").and_then(|m| m.get("compression")).and_then(Value::as_str) {
-            settings.mono = match c {
-                "ccitt_g4" | "ccitt" | "g4" => MonoCompression::CcittG4,
-                "retain" => MonoCompression::Retain,
-                other => return Err(ToolError::InvalidArgs(format!("unknown mono compression {other:?} (ccitt_g4, retain)"))),
-            };
+        if let Some(mono) = a.get("mono") {
+            let unknown = |c: &Value| ToolError::InvalidArgs(format!("unknown mono compression {c} (ccitt_g4, retain)"));
+            let mono = mono.as_object().ok_or_else(|| ToolError::InvalidArgs("mono must be an object: { compression: ccitt_g4|retain }".into()))?;
+            if let Some(c) = mono.get("compression") {
+                settings.mono = match c.as_str() {
+                    Some("ccitt_g4" | "ccitt" | "g4") => MonoCompression::CcittG4,
+                    Some("retain") => MonoCompression::Retain,
+                    _ => return Err(unknown(c)),
+                };
+            }
         }
         for (key, flag) in [
             ("merge_fragments", &mut settings.merge_fragments),

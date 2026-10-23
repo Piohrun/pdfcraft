@@ -402,11 +402,13 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
 }
 
 /// Whether colour space `cs` has one colour component, so a 1-bit image in it has one bit per
-/// pixel: grey, a separation, an indexed space or a DeviceN of one colourant.
+/// pixel: grey, a separation, an indexed space or a DeviceN of one colourant. Of names, only
+/// DeviceGray counts: another name is no colour space on its own (`/Indexed` and `/CalGray` need
+/// their parameters), so it can only name a resource, which might be RGB.
 fn one_component(doc: &Document, cs: &Object) -> bool {
     let cs = doc.resolve(cs);
     match &*cs {
-        Object::Name(n) => matches!(n.as_slice(), b"DeviceGray" | b"G" | b"CalGray" | b"Indexed" | b"I"),
+        Object::Name(n) => matches!(n.as_slice(), b"DeviceGray" | b"G"),
         Object::Array(a) => match a.first().and_then(Object::as_name) {
             Some(b"CalGray" | b"Separation" | b"Indexed" | b"I") => true,
             Some(b"ICCBased") => a.get(1).is_some_and(|icc| matches!(&*doc.resolve(icc), Object::Stream(s) if s.dict.int(b"N") == Some(1))),
