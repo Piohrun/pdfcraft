@@ -100,6 +100,92 @@ fn filters(s: &Stream) -> Vec<Vec<u8>> {
     }
 }
 
+/// The samples of image `s`, decoded: through its filters, or, for a CCITT fax image (its only
+/// filter), through a CCITT decoder, as rows of one-bit samples each starting on a byte, with black
+/// as 0 unless `/BlackIs1` says 1, as `CCITTFaxDecode` gives them (ISO 32000-2 §7.4.6).
+fn decoded(doc: &Document, s: &Stream) -> Result<Vec<u8>, String> {
+    match filters(s).as_slice() {
+        [f] if f == b"CCITTFaxDecode" || f == b"CCF" => ccitt(doc, s),
+        _ => s.decoded().map_err(|e| e.to_string()),
+    }
+}
+
+/// [`decoded`] for a CCITT fax image, with its `/DecodeParms` (Table 11 defaults). `/Columns` has to
+/// be the image's width; pixels past it and rows past the image's height are dropped, so the output
+/// is bounded by the size the caller already checked. A stream that ends early gives fewer rows,
+/// which the caller refuses.
+fn ccitt(doc: &Document, s: &Stream) -> Result<Vec<u8>, String> {
+    struct Rows {
+        out: Vec<u8>,
+        row: Vec<u8>,
+        x: usize,
+        columns: usize,
+        rows: usize,
+        black_is_1: bool,
+    }
+    impl Rows {
+        fn push(&mut self, white: bool, count: usize) {
+            for _ in 0..count {
+                if self.x < self.columns
+                    && white != self.black_is_1
+                    && let Some(b) = self.row.get_mut(self.x / 8)
+                {
+                    *b |= 0x80 >> (self.x % 8);
+                }
+                self.x = self.x.saturating_add(1);
+            }
+        }
+    }
+    impl hayro_ccitt::Decoder for Rows {
+        fn push_pixel(&mut self, white: bool) {
+            self.push(white, 1);
+        }
+        fn push_pixel_chunk(&mut self, white: bool, chunks: u32) {
+            self.push(white, (chunks as usize).saturating_mul(8));
+        }
+        fn next_line(&mut self) {
+            if self.out.len() / self.row.len().max(1) < self.rows {
+                self.out.extend_from_slice(&self.row);
+            }
+            self.row.fill(0);
+            self.x = 0;
+        }
+    }
+    let p = s.dict.get(b"DecodeParms").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()).unwrap_or_default();
+    let flag = |key: &[u8], default: bool| match p.get(key).map(|v| doc.resolve(v)).as_deref() {
+        Some(Object::Bool(b)) => *b,
+        _ => default,
+    };
+    let k = p.int(b"K").unwrap_or(0);
+    // A row is the image's width: that was checked against the export's size limit, so a hostile
+    // /Columns can't size the buffers.
+    let columns = u32::try_from(p.int(b"Columns").unwrap_or(1728)).ok().filter(|c| *c > 0).ok_or("the fax image has no columns")?;
+    if s.dict.int(b"Width") != Some(i64::from(columns)) {
+        return Err("the fax image's columns aren't its width".into());
+    }
+    let height = s.dict.int(b"Height").and_then(|h| u32::try_from(h).ok()).unwrap_or(0);
+    let rows = p.int(b"Rows").and_then(|r| u32::try_from(r).ok()).filter(|r| *r > 0).unwrap_or(height).min(height);
+    let settings = hayro_ccitt::DecodeSettings {
+        columns,
+        rows,
+        end_of_block: flag(b"EndOfBlock", true),
+        end_of_line: flag(b"EndOfLine", false),
+        rows_are_byte_aligned: flag(b"EncodedByteAlign", false),
+        encoding: match k {
+            ..0 => hayro_ccitt::EncodingMode::Group4,
+            0 => hayro_ccitt::EncodingMode::Group3_1D,
+            k => hayro_ccitt::EncodingMode::Group3_2D { k: u32::try_from(k).unwrap_or(u32::MAX) },
+        },
+        invert_black: false,
+    };
+    let stride = (columns as usize).div_ceil(8);
+    let mut out =
+        Rows { out: Vec::new(), row: vec![0; stride], x: 0, columns: columns as usize, rows: rows as usize, black_is_1: flag(b"BlackIs1", false) };
+    // Rows decoded before damaged data are kept; too few rows are refused by the caller.
+    let _ = hayro_ccitt::decode(&s.raw, &mut out, &mut hayro_ccitt::DecoderContext::new(settings));
+    Ok(out.out)
+}
+
 /// The file for one image: its JPEG data as is, or a PNG. An image with transparency (a soft
 /// mask, a stencil `/Mask` or a colour-key `/Mask`) is always a PNG with that transparency as
 /// alpha, JPEG images included, so cut-out images keep their transparent background.
@@ -109,7 +195,6 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
     match f.last().map(Vec::as_slice) {
         Some(b"JPXDecode") => return Err("JPEG 2000 images can't be exported yet".into()),
         Some(b"JBIG2Decode") => return Err("JBIG2 images can't be exported yet".into()),
-        Some(b"CCITTFaxDecode" | b"CCF") => return Err("CCITT fax images can't be exported yet".into()),
         Some(b"DCTDecode" | b"DCT") if !jpeg => return Err("JPEG images inside other filters can't be exported yet".into()),
         _ => {}
     }
@@ -148,7 +233,7 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
         space = decoded;
         (samples, 8)
     } else {
-        let data = s.decoded().map_err(|e| e.to_string())?;
+        let data = decoded(doc, s)?;
         let bpc = if mask { 1 } else { s.dict.int(b"BitsPerComponent").unwrap_or(8) };
         let bpc = match bpc {
             1 => 1,
@@ -466,7 +551,7 @@ fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize) -> Option<Vec<u8
 }
 
 /// A one-component mask image as 8-bit values (its `/Decode` inversion applied), scaled to
-/// `w` × `h`. `None` when it can't be decoded (JPEG 2000, JBIG2 and CCITT masks).
+/// `w` × `h`. `None` when it can't be decoded (JPEG 2000 and JBIG2 masks).
 fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>> {
     let (mw, mh) = size(m.dict.int(b"Width")?, m.dict.int(b"Height")?)?;
     let stencil = m.dict.get(b"ImageMask").is_some_and(|v| matches!(&*doc.resolve(v), Object::Bool(true)));
@@ -476,7 +561,7 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>>
             let img = image::load_from_memory_with_format(&m.raw, image::ImageFormat::Jpeg).ok()?.into_luma8();
             (img.width() as usize == mw && img.height() as usize == mh).then(|| img.into_raw())?
         }
-        Some(b"DCTDecode" | b"DCT" | b"JPXDecode" | b"JBIG2Decode" | b"CCITTFaxDecode" | b"CCF") => return None,
+        Some(b"DCTDecode" | b"DCT" | b"JPXDecode" | b"JBIG2Decode") => return None,
         _ => {
             let bpc = if stencil { 1 } else { m.dict.int(b"BitsPerComponent").unwrap_or(8) };
             let bpc = match bpc {
@@ -488,7 +573,7 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>>
                 _ => return None,
             };
             let max = (1u32 << bpc.min(8)) - 1;
-            unpack(&m.decoded().ok()?, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
+            unpack(&decoded(doc, m).ok()?, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
         }
     };
     let invert = m

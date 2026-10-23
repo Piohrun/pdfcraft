@@ -1418,3 +1418,60 @@ fn black_and_white_images_are_stored_at_one_bit() {
     );
     assert_eq!(kept[3], (Some(1), Some(b"FlateDecode".to_vec())), "Group 4 isn't smaller for 2 × 2");
 }
+
+/// The pixels of an exported PNG (RGB), as true for white.
+fn exported_white(png_data: &[u8]) -> Vec<bool> {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(png_data.to_vec())).read_info().unwrap();
+    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+    let frame = reader.next_frame(&mut buf).unwrap();
+    assert_eq!(frame.color_type, png::ColorType::Rgb);
+    buf[..frame.buffer_size()].as_chunks::<3>().0.iter().map(|p| *p == [255, 255, 255]).collect()
+}
+
+/// Export ▸ Images reads CCITT fax images: a page created from a 1-bit PNG (Group 4 now) exports as
+/// the picture, as does the picture coded the other way round with /BlackIs1. One whose /Columns
+/// aren't its width is skipped, not misread.
+#[test]
+fn ccitt_fax_images_export_as_their_picture() {
+    use png::{BitDepth, ColorType};
+    let (w, h) = (1200u32, 240u32);
+    let bits = strokes(w, h);
+    let stride = (w as usize).div_ceil(8);
+    let picture: Vec<bool> =
+        (0..h as usize).flat_map(|y| (0..w as usize).map(move |x| (y, x))).map(|(y, x)| bits[y * stride + x / 8] & (0x80 >> (x % 8)) != 0).collect();
+    let mut doc = from_images(&[("scan.png".into(), png_of(w, h, ColorType::Grayscale, BitDepth::One, &bits, None, None))]).unwrap();
+    assert_eq!(image_of(&doc, 0).name(b"Filter"), Some(&b"CCITTFaxDecode"[..]));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(exported_white(&out.images[0].data), picture);
+
+    // The same picture coded with 1 for black, which /BlackIs1 says.
+    let r = {
+        let page = pdfcraft_model::pages(&doc)[0].clone();
+        let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        xo.get(b"Im0").and_then(Object::as_ref).unwrap()
+    };
+    let base = image_of(&doc, 0);
+    let with = |black_is_1: bool, columns: i64, data: Vec<u8>| {
+        let mut d = base.clone();
+        let mut parms = Dict::new();
+        parms.set(b"K".to_vec(), Object::Int(-1));
+        parms.set(b"Columns".to_vec(), Object::Int(columns));
+        parms.set(b"Rows".to_vec(), Object::Int(i64::from(h)));
+        parms.set(b"BlackIs1".to_vec(), Object::Bool(black_is_1));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        d.remove(b"Length");
+        Stream::from_raw(d, data)
+    };
+    let inverted: Vec<u8> = bits.iter().map(|b| !b).collect();
+    let stream = with(true, i64::from(w), pdfcraft_filters::encode_g4(&inverted, w, h).unwrap());
+    doc.set(r, Object::Stream(stream));
+    let out = extract_images(&doc, &[0], 0);
+    assert_eq!(exported_white(&out.images[0].data), picture, "BlackIs1");
+
+    let stream = with(false, i64::from(w) + 8, pdfcraft_filters::encode_g4(&bits, w, h).unwrap());
+    doc.set(r, Object::Stream(stream));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.images.is_empty() && out.skipped.len() == 1, "columns other than the width: skipped");
+}

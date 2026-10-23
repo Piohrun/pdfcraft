@@ -32,7 +32,8 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
 - **Monochrome images** (`Settings::mono`, CCITT Group 4 by default): a 1-bit image with one
   colour component (grey, indexed, a separation) or an image mask, stored with no filter or with
   general-purpose ones, is stored again as CCITT Group 4 (`pdfcraft_filters::encode_g4`) when
-  that is smaller as stored. It is lossless: the samples decode to the same bits, so the colour
+  that is smaller as stored. An eight-bit grey image of only 0 and 255 is packed to one bit first
+  (not an indexed image, whose samples are palette indices, nor one with a colour-key `/Mask`). It is lossless: the samples decode to the same bits, so the colour
   space, decode array and masks stay. Group 4 wins on scans, whose ragged edges defeat Flate;
   on clean computer-drawn 1-bit art Flate can be smaller, and the image then stays. Not yet:
   JBIG2, monochrome downsampling, inline images, soft masks and `/Mask` images, and rows wider
