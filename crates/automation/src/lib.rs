@@ -1215,7 +1215,7 @@ impl Automation {
     }
 
     fn doc_optimize(&mut self, a: &Args) -> Result<Value> {
-        use pdfcraft_engine::optimize::{Compression, ImageSettings, Preset};
+        use pdfcraft_engine::optimize::{Compression, ImageSettings, MonoCompression, Preset};
         let id = self.doc(a)?.id;
         let before = self.doc(a)?.bytes.len();
         let path = self.resolve(a.str("path")?, true)?;
@@ -1249,6 +1249,13 @@ impl Automation {
         };
         settings.color = images("color", settings.color)?;
         settings.gray = images("gray", settings.gray)?;
+        if let Some(c) = a.get("mono").and_then(|m| m.get("compression")).and_then(Value::as_str) {
+            settings.mono = match c {
+                "ccitt_g4" | "ccitt" | "g4" => MonoCompression::CcittG4,
+                "retain" => MonoCompression::Retain,
+                other => return Err(ToolError::InvalidArgs(format!("unknown mono compression {other:?} (ccitt_g4, retain)"))),
+            };
+        }
         for (key, flag) in [
             ("merge_fragments", &mut settings.merge_fragments),
             ("discard_thumbnails", &mut settings.discard_thumbnails),

@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use pdfcraft_content::{Matrix, Pieces};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
-use crate::{Compression, ImageSettings, OptimizeError, Report, Settings, Stage};
+use crate::{Compression, ImageSettings, MonoCompression, OptimizeError, Report, Settings, Stage};
 
 /// Images with more pixels than this are left alone (memory).
 const MAX_PIXELS: u64 = 80_000_000;
@@ -401,6 +401,61 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
     (after < before).then_some((new, smask))
 }
 
+/// Whether colour space `cs` has one colour component, so a 1-bit image in it has one bit per
+/// pixel: grey, a separation, an indexed space or a DeviceN of one colourant.
+fn one_component(doc: &Document, cs: &Object) -> bool {
+    let cs = doc.resolve(cs);
+    match &*cs {
+        Object::Name(n) => matches!(n.as_slice(), b"DeviceGray" | b"G" | b"CalGray" | b"Indexed" | b"I"),
+        Object::Array(a) => match a.first().and_then(Object::as_name) {
+            Some(b"CalGray" | b"Separation" | b"Indexed" | b"I") => true,
+            Some(b"ICCBased") => a.get(1).is_some_and(|icc| matches!(&*doc.resolve(icc), Object::Stream(s) if s.dict.int(b"N") == Some(1))),
+            Some(b"DeviceN") => a.get(1).is_some_and(|names| doc.resolve(names).as_array().is_some_and(|n| n.len() == 1)),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// A black-and-white image (one bit per pixel, or an image mask) stored again as CCITT Group 4,
+/// if `compression` asks for that and the result is smaller as stored. Only images whose samples
+/// PdfCraft decodes (no filter, or general-purpose filters: image codecs don't decode here)
+/// qualify. The samples decode to the same bits, so the colour space, decode array and masks stay
+/// as they are.
+fn mono(doc: &Document, s: &Stream, compression: MonoCompression) -> Option<Stream> {
+    if compression != MonoCompression::CcittG4 {
+        return None;
+    }
+    let d = &s.dict;
+    let bits = d.int(b"BitsPerComponent");
+    let qualifies = if matches!(d.get(b"ImageMask"), Some(Object::Bool(true))) {
+        bits.is_none_or(|b| b == 1)
+    } else {
+        bits == Some(1) && d.get(b"ColorSpace").is_some_and(|cs| one_component(doc, cs))
+    };
+    if !qualifies {
+        return None;
+    }
+    let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
+    if w == 0 || h == 0 || w > pdfcraft_filters::MAX_G4_COLUMNS || u64::from(w) * u64::from(h) > MAX_PIXELS {
+        return None;
+    }
+    let g4 = pdfcraft_filters::encode_g4(&s.decoded().ok()?, w, h).ok()?;
+    let mut new = d.clone();
+    for k in [&b"Filter"[..], b"DecodeParms", b"Length", b"DL"] {
+        new.remove(k);
+    }
+    let mut parms = Dict::new();
+    parms.set(b"K".to_vec(), Object::Int(-1));
+    parms.set(b"Columns".to_vec(), Object::Int(i64::from(w)));
+    parms.set(b"Rows".to_vec(), Object::Int(i64::from(h)));
+    new.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+    new.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+    let new = Stream::from_raw(new, g4);
+    // Smaller as stored, counting the larger dictionary: a tiny image can lose by it.
+    (crate::stored_len(&new)? < crate::stored_len(s)?).then_some(new)
+}
+
 pub(crate) fn run(
     doc: &mut Document,
     pages: &[ObjRef],
@@ -427,6 +482,13 @@ pub(crate) fn run(
         let obj = doc.get(r);
         let Object::Stream(s) = &*obj else { continue };
         report.images += 1;
+        if let Some(new) = mono(doc, s, settings.mono) {
+            report.image_bytes_before += s.raw.len();
+            report.image_bytes_after += new.raw.len();
+            report.images_recompressed += 1;
+            doc.set(r, Object::Stream(new));
+            continue;
+        }
         let Some(n) = s.dict.get(b"ColorSpace").and_then(|cs| components(doc, cs)) else { continue };
         let st = if n == 1 { &settings.gray } else { &settings.color };
         let Some((new, smask)) = process(doc, s, ppi, st, n) else { continue };
