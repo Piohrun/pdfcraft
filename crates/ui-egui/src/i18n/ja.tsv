@@ -532,6 +532,8 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names} を読み取り、それらがこのフィールドを読み返します。循環はどの順序でも直せません。いずれかの数式を変更してください。
 	Not in order	順序にない
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF に保存された計算順序にありません。ほかの PDF ビューアーでは計算されない可能性があります。
+	Reads {name}, which the form doesn't have, so it gets no value there.	フォームにない {name} を読み取るため、そこからは値を得られません。
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	スクリプトが実行中に名前を組み立てるフィールドも読み取るため、それらの読み取りは確認できません。
 	Back to Prepare a form	「フォームを作成」に戻る
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	このフォームには値を計算するフィールドがまだありません。フィールドのプロパティの［計算］タブで計算を設定すると、ここに表示されます。
 	{names} and {last}	{names}、{last}

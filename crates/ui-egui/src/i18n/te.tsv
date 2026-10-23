@@ -509,6 +509,8 @@ comment menu	Edit	సవరించు
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names}ను చదువుతుంది, అవి దీన్ని తిరిగి చదువుతాయి. ఏ క్రమమూ లూప్‌ను సరిచేయదు: సూత్రాలలో ఒకదాన్ని మార్చండి.
 	Not in order	క్రమంలో లేదు
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDFలో సేవ్ చేసిన గణన క్రమంలో లేదు: ఇతర PDF వీక్షకులు దీన్ని లెక్కించకపోవచ్చు.
+	Reads {name}, which the form doesn't have, so it gets no value there.	{name}ను చదువుతుంది, కానీ అది ఫారమ్‌లో లేదు, కాబట్టి దాని నుండి విలువ రాదు.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	దీని స్క్రిప్ట్ నడుస్తున్నప్పుడు పేర్లను కూర్చే ఫీల్డ్‌లను కూడా చదువుతుంది, కాబట్టి ఆ చదువులను తనిఖీ చేయలేము.
 	Back to Prepare a form	‘ఫారాన్ని సిద్ధం చేయి’కి తిరిగి వెళ్లు
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	ఈ ఫారంలో ఏ ఫీల్డ్ ఇంకా తన విలువను గణించదు. ఫీల్డ్ లక్షణాలలోని గణన ట్యాబ్‌లో దానికి గణన ఇవ్వండి, అది ఇక్కడ కనిపిస్తుంది.
 	{names} and {last}	{names} మరియు {last}

@@ -490,6 +490,8 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names} alanlarını okur, onlar da bu alanı okur. Hiçbir sıra bir döngüyü düzeltemez: formüllerden birini değiştirin.
 	Not in order	Sırada değil
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF'te kayıtlı hesaplama sırasında yok: diğer PDF görüntüleyicileri bunu hesaplamayabilir.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Formda olmayan {name} alanını okur, bu yüzden oradan değer alamaz.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Komut dosyası, adlarını çalışırken oluşturduğu alanları da okur; bu okumalar denetlenemez.
 	Back to Prepare a form	Form hazırla'ya geri dön
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Bu formdaki hiçbir alan henüz değerini hesaplamıyor. Bir alana özelliklerinin Hesapla sekmesinde bir hesaplama verin, burada görünür.
 	{names} and {last}	{names} ve {last}

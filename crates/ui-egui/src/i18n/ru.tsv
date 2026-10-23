@@ -525,6 +525,8 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Читает {names}, которые в свою очередь читают его. Никакой порядок не исправит цикл: измените одну из формул.
 	Not in order	Вне порядка
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Отсутствует в порядке вычислений, сохранённом в PDF: другие программы просмотра PDF могут его не вычислять.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Читает {name}, которого нет в форме, поэтому не получает оттуда значения.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Его скрипт также читает поля, имена которых составляет во время выполнения, поэтому эти чтения нельзя проверить.
 	Back to Prepare a form	Назад к «Подготовить форму»
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Ни одно поле этой формы пока не вычисляет своё значение. Задайте полю вычисление на вкладке «Вычислить» его свойств, и оно появится здесь.
 	{names} and {last}	{names} и {last}

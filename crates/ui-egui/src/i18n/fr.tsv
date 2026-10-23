@@ -505,6 +505,8 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Lit {names}, qui le lisent en retour. Aucun ordre ne peut corriger une boucle : modifiez l'une des formules.
 	Not in order	Hors de l'ordre
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Absent de l'ordre de calcul enregistré dans le PDF : d'autres lecteurs PDF risquent de ne pas le calculer.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Lit {name}, qui n'existe pas dans le formulaire : aucune valeur n'en provient.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Son script lit aussi des champs dont il construit les noms à l'exécution : ces lectures ne peuvent pas être vérifiées.
 	Back to Prepare a form	Retour à Préparer un formulaire
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Aucun champ de ce formulaire ne calcule encore sa valeur. Donnez un calcul à un champ dans l'onglet Calculer de ses propriétés, et il apparaîtra ici.
 	{names} and {last}	{names} et {last}

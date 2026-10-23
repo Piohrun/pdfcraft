@@ -1023,6 +1023,8 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Bere {names}, ki ga berejo nazaj. Noben vrstni red ne popravi zanke: spremenite eno od formul.
 	Not in order	Ni v vrstnem redu
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Manjka v vrstnem redu izračunov, shranjenem v PDF-ju: drugi pregledovalniki PDF ga morda ne izračunajo.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Bere {name}, ki ga v obrazcu ni, zato od tam ne dobi vrednosti.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Njegov skript bere tudi polja, katerih imena sestavi med izvajanjem, zato teh branj ni mogoče preveriti.
 	Back to Prepare a form	Nazaj na Pripravi obrazec
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Nobeno polje tega obrazca še ne izračuna svoje vrednosti. Polju dodelite izračun na zavihku Izračunaj v njegovih lastnostih in prikazalo se bo tukaj.
 	{names} and {last}	{names} in {last}

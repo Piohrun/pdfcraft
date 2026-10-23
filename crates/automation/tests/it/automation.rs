@@ -4580,6 +4580,39 @@ fn the_calculation_order_is_read_fixed_and_set() {
     assert_eq!((value(&mut a, "total"), value(&mut a, "tax")), (json!("0"), json!("0")), "undone with the values it recalculated");
 }
 
+/// The calculation order through the tool shows each formula, in form_set_props's shape or as a
+/// script, and flags a read of a field the form doesn't have and a script that builds the names
+/// it reads; form_fields shows a custom script too.
+#[test]
+fn the_calculation_order_shows_formulas_and_what_they_cannot_read() {
+    let dir = workdir("calcformulas");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (i, name) in ["qty", "price", "sub", "tax", "total"].into_iter().enumerate() {
+        let y = 20 + 30 * i;
+        ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, y, 180, y + 22], "name": name }));
+    }
+    let script = "event.value = getField(\"sub\").value / 10 + getField(\"row\" + 1).value;";
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "sub", "calculate": { "notation": "qty * pric" } }));
+    ok(&mut a, "form_set_script", json!({ "doc": doc, "field": "tax", "event": "calculate", "script": script }));
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "total", "calculate": { "op": "sum", "fields": ["sub", "tax"] } }));
+    let r = ok(&mut a, "form_calculation_order", json!({ "doc": doc }));
+    assert_eq!(r["calculation_order"], json!(["sub", "tax", "total"]));
+    let formulas: Vec<Value> = r["fields"].as_array().unwrap().iter().map(|f| f["formula"].clone()).collect();
+    assert_eq!(formulas, [json!({ "notation": "qty * pric" }), json!({ "script": script }), json!({ "op": "sum", "fields": ["sub", "tax"] })]);
+    assert_eq!(r["fields"][0]["issues"], json!([{ "issue": "missing_field", "field": "pric" }]));
+    assert_eq!(r["fields"][1]["reads"], json!(["sub"]));
+    assert_eq!(r["fields"][1]["issues"], json!([{ "issue": "built_names" }]));
+    assert_eq!(r["fields"][2]["issues"], json!([]));
+    assert_eq!(r["fixable"], false, "neither is an order to fix");
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let tax = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "tax").unwrap();
+    assert_eq!(tax["calculate"], json!({ "script": script }));
+    // A script is set with form_set_script, and form_set_props says so.
+    let e = err(&mut a, "form_set_props", json!({ "doc": doc, "field": "tax", "calculate": { "script": script } }));
+    assert!(e.to_string().contains("form_set_script"), "{e}");
+}
+
 #[test]
 fn tab_order_and_field_appearance_through_tools() {
     let dir = workdir("taborder");

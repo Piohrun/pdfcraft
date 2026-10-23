@@ -83,7 +83,10 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   order `recalculate` runs them, with the fields each formula reads (`Calculate::reads`,
   `af::calculation_reads`; names built at run time aren't known) and what is wrong with the
   order: a field reading one that calculates later, a loop, a field `/CO` leaves out, and `/CO`
-  entries that calculate nothing. `CalculationOrder::fixed` is Fix order: a stable topological
+  entries that calculate nothing. Two issues are about the formula itself: it reads a field the
+  form doesn't have (`MissingField`; the field of that name, a field under it and a widget of one,
+  `price.0`, all count as there), or its script builds names at run time (`BuiltNames`,
+  `af::reads_built_names`), so its reads are incomplete. `CalculationOrder::fixed` is Fix order: a stable topological
   sort that keeps the current order wherever it can and leaves loops as they are.
   `set_calculation_order` writes `/CO` afresh. A field that gets a calculation joins the end of
   the order; one whose calculation changes keeps its place.

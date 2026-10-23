@@ -613,6 +613,8 @@ key	Space	Mezerník
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Čte {names}, která ho čtou zpět. Žádné pořadí smyčku neopraví: změňte jeden ze vzorců.
 	Not in order	Mimo pořadí
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Chybí v pořadí výpočtů uloženém v PDF: jiné prohlížeče PDF ho možná nepočítají.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Čte {name}, které formulář nemá, takže odtud nedostane žádnou hodnotu.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Jeho skript čte i pole, jejichž názvy sestavuje za běhu, takže tato čtení nelze zkontrolovat.
 	Back to Prepare a form	Zpět na Připravit formulář
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Žádné pole tohoto formuláře zatím nepočítá svou hodnotu. Zadejte poli výpočet na kartě Výpočet v jeho vlastnostech a zobrazí se zde.
 	{names} and {last}	{names} a {last}

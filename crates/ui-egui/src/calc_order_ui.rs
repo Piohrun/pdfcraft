@@ -477,6 +477,9 @@ fn explained(issues: &[CalculationIssue]) -> String {
     issues
         .iter()
         .map(|i| match i {
+            CalculationIssue::MissingField { field } => {
+                crate::i18n::fmt(tl!("Reads {name}, which the form doesn't have, so it gets no value there."), &[("name", field)])
+            }
             CalculationIssue::RunsTooEarly { field } => {
                 crate::i18n::fmt(tl!("Reads {name}, which calculates later, so it shows an old value."), &[("name", field)])
             }
@@ -486,6 +489,9 @@ fn explained(issues: &[CalculationIssue]) -> String {
             ),
             CalculationIssue::NotInOrder => {
                 tl!("Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.").to_owned()
+            }
+            CalculationIssue::BuiltNames => {
+                tl!("Its script also reads fields whose names it builds as it runs, so those reads can't be checked.").to_owned()
             }
         })
         .collect::<Vec<_>>()

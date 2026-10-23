@@ -1847,6 +1847,8 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Διαβάζει τα {names}, που με τη σειρά τους το διαβάζουν. Καμία σειρά δεν διορθώνει έναν βρόχο: αλλάξτε έναν από τους τύπους.
 	Not in order	Εκτός σειράς
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Λείπει από τη σειρά υπολογισμού που είναι αποθηκευμένη στο PDF: άλλα προγράμματα προβολής PDF ίσως δεν το υπολογίζουν.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Διαβάζει το {name}, που δεν υπάρχει στη φόρμα, οπότε δεν παίρνει τιμή από εκεί.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Η δέσμη ενεργειών του διαβάζει επίσης πεδία των οποίων τα ονόματα σχηματίζει κατά την εκτέλεση, οπότε αυτές οι αναγνώσεις δεν μπορούν να ελεγχθούν.
 	Back to Prepare a form	Επιστροφή στην Προετοιμασία φόρμας
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Κανένα πεδίο αυτής της φόρμας δεν υπολογίζει ακόμη την τιμή του. Δώστε σε ένα πεδίο υπολογισμό στην καρτέλα Υπολογισμός των ιδιοτήτων του και θα εμφανιστεί εδώ.
 	{names} and {last}	{names} και {last}

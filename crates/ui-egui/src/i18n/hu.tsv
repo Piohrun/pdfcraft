@@ -503,6 +503,8 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Ezeket olvassa: {names}, amelyek visszaolvassák. Hurkot semmilyen sorrend nem javít meg: módosítsd az egyik képletet.
 	Not in order	Nincs a sorrendben
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Hiányzik a PDF-ben mentett számítási sorrendből: más PDF-megjelenítők talán nem számítják ki.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Ezt olvassa: {name}, amely nincs az űrlapon, így onnan nem kap értéket.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	A szkriptje olyan mezőket is olvas, amelyek nevét futás közben állítja össze, így ezek az olvasások nem ellenőrizhetők.
 	Back to Prepare a form	Vissza az Űrlap előkészítéséhez
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Ennek az űrlapnak még egyik mezője sem számítja ki az értékét. Adj egy mezőnek számítást a tulajdonságai Számítás lapján, és itt megjelenik.
 	{names} and {last}	{names} és {last}

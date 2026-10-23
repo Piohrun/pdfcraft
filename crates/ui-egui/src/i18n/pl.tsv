@@ -527,6 +527,8 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Odczytuje {names}, które z kolei odczytują je. Żadna kolejność nie naprawi pętli: zmień jedną z formuł.
 	Not in order	Poza kolejnością
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Brakuje go w kolejności obliczeń zapisanej w pliku PDF: inne przeglądarki PDF mogą go nie obliczać.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Odczytuje {name}, którego nie ma w formularzu, więc nie dostaje stamtąd żadnej wartości.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Jego skrypt odczytuje też pola, których nazwy tworzy w trakcie działania, więc tych odczytów nie da się sprawdzić.
 	Back to Prepare a form	Wróć do „Przygotuj formularz”
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Żadne pole tego formularza nie oblicza jeszcze swojej wartości. Nadaj polu obliczenie na karcie Obliczenia w jego właściwościach, a pojawi się tutaj.
 	{names} and {last}	{names} i {last}

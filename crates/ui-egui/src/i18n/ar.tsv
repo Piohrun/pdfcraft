@@ -532,6 +532,8 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	يقرأ {names} التي تقرؤه بدورها. لا يمكن لأي ترتيب إصلاح الحلقة: غيّر إحدى الصيغ.
 	Not in order	خارج الترتيب
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	غير موجود في ترتيب الحساب المحفوظ في ملف PDF: قد لا تحسبه برامج عرض PDF الأخرى.
+	Reads {name}, which the form doesn't have, so it gets no value there.	يقرأ {name}، وهو غير موجود في النموذج، لذا لا يحصل منه على أي قيمة.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	يقرأ سكربته أيضًا حقولًا يبني أسماءها أثناء التشغيل، لذا لا يمكن التحقق من هذه القراءات.
 	Back to Prepare a form	العودة إلى تجهيز نموذج
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	لا يحسب أي حقل في هذا النموذج قيمته بعد. امنح حقلًا عملية حساب في علامة التبويب «الحساب» ضمن خصائصه، وسيظهر هنا.
 	{names} and {last}	{names} و{last}

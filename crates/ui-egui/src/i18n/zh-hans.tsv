@@ -208,6 +208,8 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	读取 {names}，而它们又读取此字段。任何顺序都无法修正循环：请修改其中一个公式。
 	Not in order	不在顺序中
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF 中保存的计算顺序缺少此字段：其他 PDF 查看器可能不会计算它。
+	Reads {name}, which the form doesn't have, so it gets no value there.	读取表单中不存在的 {name}，因此从中得不到值。
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	其脚本还会读取运行时才拼出名称的字段，因此无法检查这些读取。
 	Back to Prepare a form	返回准备表单
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	此表单中还没有计算自身值的字段。在字段属性的“计算”选项卡中为字段设置计算后，它会显示在这里。
 	{names} and {last}	{names}和{last}

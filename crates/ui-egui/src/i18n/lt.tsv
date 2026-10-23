@@ -701,6 +701,8 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Skaito {names}, kurie savo ruožtu skaito jį. Jokia tvarka neištaisys ciklo: pakeiskite vieną iš formulių.
 	Not in order	Ne tvarkoje
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Trūksta PDF faile įrašytoje skaičiavimo tvarkoje: kitos PDF peržiūros programos gali jo neskaičiuoti.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Skaito {name}, kurio formoje nėra, todėl iš ten negauna jokios reikšmės.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Jo scenarijus taip pat skaito laukus, kurių pavadinimus sudaro vykdymo metu, todėl šių skaitymų patikrinti negalima.
 	Back to Prepare a form	Grįžti į „Rengti formą“
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Nė vienas šios formos laukas dar neskaičiuoja savo reikšmės. Nustatykite laukui skaičiavimą jo savybių kortelėje „Skaičiavimas“, ir jis bus rodomas čia.
 	{names} and {last}	{names} ir {last}

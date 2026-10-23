@@ -202,6 +202,8 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Чете {names}, които на свой ред го четат. Никой ред не може да поправи цикъл: променете една от формулите.
 	Not in order	Извън реда
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Липсва в реда на изчисляване, записан в PDF файла: други програми за PDF може да не го изчисляват.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Чете {name}, което го няма във формуляра, затова не получава стойност оттам.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Скриптът му чете и полета, чиито имена съставя по време на изпълнение, затова тези четения не могат да бъдат проверени.
 	Back to Prepare a form	Назад към „Подготви формуляр“
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Все още нито едно поле в този формуляр не изчислява стойността си. Задайте изчисление на поле в раздела „Изчисляване“ на свойствата му и то ще се покаже тук.
 	{names} and {last}	{names} и {last}

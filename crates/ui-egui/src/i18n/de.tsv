@@ -505,6 +505,8 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Liest {names}, die es wieder lesen. Keine Reihenfolge kann eine Schleife beheben: Ändere eine der Formeln.
 	Not in order	Nicht in der Reihenfolge
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Fehlt in der im PDF gespeicherten Berechnungsreihenfolge: Andere PDF-Viewer berechnen es womöglich nicht.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Liest {name}, das es im Formular nicht gibt, und erhält dort deshalb keinen Wert.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Sein Skript liest auch Felder, deren Namen es erst beim Ausführen bildet. Diese Lesezugriffe lassen sich nicht prüfen.
 	Back to Prepare a form	Zurück zu „Formular vorbereiten“
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Noch berechnet kein Feld dieses Formulars seinen Wert. Gib einem Feld auf dem Tab „Berechnen“ seiner Eigenschaften eine Berechnung, dann erscheint es hier.
 	{names} and {last}	{names} und {last}

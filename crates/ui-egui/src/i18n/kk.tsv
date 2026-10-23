@@ -492,6 +492,8 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names} өрістерін оқиды, олар оны қайта оқиды. Ешбір рет циклды түзете алмайды: формулалардың бірін өзгертіңіз.
 	Not in order	Ретте жоқ
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF ішінде сақталған есептеу ретінде жоқ: басқа PDF қарау құралдары оны есептемеуі мүмкін.
+	Reads {name}, which the form doesn't have, so it gets no value there.	{name} өрісін оқиды, бірақ ол пішінде жоқ, сондықтан одан мән алмайды.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Оның скрипті атауларын орындалу кезінде құрастыратын өрістерді де оқиды, сондықтан бұл оқуларды тексеру мүмкін емес.
 	Back to Prepare a form	Форманы дайындауға оралу
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Бұл формада мәнін есептейтін өріс әлі жоқ. Өріс сипаттарының «Есептеу» қойындысында оған есептеу беріңіз, сонда ол осында көрсетіледі.
 	{names} and {last}	{names} және {last}
