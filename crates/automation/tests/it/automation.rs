@@ -5785,7 +5785,7 @@ fn scanned_page() -> Vec<u8> {
 }
 
 /// With `mono: { compression: jbig2 }` a scan's black-and-white image is stored as lossless JBIG2,
-/// smaller than as Group 4.
+/// smaller than as Group 4, and exports as the same picture.
 #[test]
 fn doc_optimize_stores_black_and_white_images_as_jbig2() {
     let dir = workdir("optimize-jbig2");
@@ -5806,6 +5806,15 @@ fn doc_optimize_stores_black_and_white_images_as_jbig2() {
         })
         .collect();
     assert_eq!(filters, [b"JBIG2Decode".to_vec()]);
+    // Export ▸ Images gives the copy's picture back as it gives the scan's.
+    let copy = ok(&mut a, "doc_open", json!({ "path": "jbig2.pdf" }))["doc"].as_u64().unwrap();
+    let mut exported = |doc: u64, folder: &str| {
+        let r = ok(&mut a, "doc_export_all_images", json!({ "doc": doc, "folder": folder }));
+        let files = r["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1, "{r}");
+        std::fs::read(files[0]["path"].as_str().unwrap()).unwrap()
+    };
+    assert_eq!(exported(copy, "from-jbig2"), exported(doc, "from-scan"));
 }
 
 /// A scan's black-and-white image is stored as CCITT Group 4 by default, and kept as it is with
