@@ -1092,3 +1092,38 @@ fn a_loop_has_its_own_card_that_opens_the_formula() {
     let draft = h.state().field_props.as_ref().map(|d| (d.field.clone(), d.tab));
     assert_eq!(draft, Some(("a".to_owned(), FieldTab::Calculate)));
 }
+
+/// A formula that reads a field the form doesn't have gets a card of its own, in place of "every
+/// field calculates after the fields it reads", and its link opens that formula. A script that
+/// builds the names it reads gets a note.
+#[test]
+fn a_formula_reading_a_missing_field_has_its_own_card() {
+    use pdfcraft_engine::form_scripts::Calculate;
+    use pdfcraft_engine::{Edit, FieldProps, NewField};
+    use pdfcraft_ui_egui::prepare::FieldTab;
+    let mut h = harness();
+    for (i, name) in ["qty", "discount", "sub", "rows"].into_iter().enumerate() {
+        let y = 200.0 + 30.0 * i as f64;
+        let kind = NewField::Text { multiline: false };
+        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
+    }
+    let props = Box::new(FieldProps { calculate: Some(Calculate::Notation("qty - discount".into())), ..Default::default() });
+    h.state_mut().apply_edit(Edit::SetFieldProps { name: "sub".into(), props });
+    let script = Some("event.value = getField(\"row\" + 1).value;".to_owned());
+    h.state_mut().apply_edit(Edit::SetFieldScript { name: "rows".into(), event: "calculate".into(), script });
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    h.get_by_label("Calculation order").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Every field calculates after the fields it reads.").is_some(), "nothing is missing yet");
+    assert!(h.query_by_label("rows builds some field names as it runs, so those reads aren't checked.").is_some());
+    h.state_mut().apply_edit(Edit::DeleteField { name: "discount".into() });
+    h.run_steps(3);
+    assert!(h.query_by_label("1 formula reads a field the form doesn't have").is_some());
+    assert!(h.query_by_label("sub reads discount, which the form doesn't have.").is_some());
+    assert!(h.query_by_label("Every field calculates after the fields it reads.").is_none(), "no all-clear while a formula is broken");
+    h.get_by_label("Edit sub's formula").click();
+    h.run_steps(3);
+    let draft = h.state().field_props.as_ref().map(|d| (d.field.clone(), d.tab));
+    assert_eq!(draft, Some(("sub".to_owned(), FieldTab::Calculate)));
+}
