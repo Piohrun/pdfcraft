@@ -1431,7 +1431,8 @@ fn exported_white(png_data: &[u8]) -> Vec<bool> {
 /// Export ▸ Images reads CCITT fax images: a page created from a 1-bit PNG (Group 4 now) exports as
 /// the picture, as does the picture coded the other way round with /BlackIs1, the picture with its
 /// filter and parameters in arrays, with /K and /Columns given by reference, with a /Rows below its
-/// height, and behind another filter. One whose /Columns aren't its width is skipped, not misread.
+/// height, and behind another filter (its parameters by reference too). One whose /Columns aren't
+/// its width is skipped, not misread.
 #[test]
 fn ccitt_fax_images_export_as_their_picture() {
     use png::{BitDepth, ColorType};
@@ -1504,6 +1505,22 @@ fn ccitt_fax_images_export_as_their_picture() {
         assert!(out.skipped.is_empty(), "{outer}: {:?}", out.skipped);
         assert_eq!(exported_white(&out.images[0].data), picture, "behind {outer}");
     }
+    // Behind Flate with a PNG predictor, whose parameters are given by reference.
+    let padded: Vec<u8> = g4.iter().copied().chain(std::iter::repeat_n(0, 16 - g4.len() % 16)).collect();
+    let params = pdfcraft_filters::Params { predictor: 12, colors: 1, bits_per_component: 8, columns: 16, early_change: 1 };
+    let predicted = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, &padded).unwrap();
+    let mut flate_parms = Dict::new();
+    flate_parms.set(b"Predictor".to_vec(), Object::Int(12));
+    flate_parms.set(b"Columns".to_vec(), Object::Int(16));
+    let flate_parms = doc.add(Object::Dict(flate_parms));
+    let mut stream = with(false, i64::from(w), predicted);
+    let parms = stream.dict.get(b"DecodeParms").cloned().unwrap();
+    stream.dict.set(b"DecodeParms".to_vec(), Object::Array(vec![Object::Ref(flate_parms), parms]));
+    stream.dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("CCITTFaxDecode")]));
+    doc.set(r, Object::Stream(stream));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(exported_white(&out.images[0].data), picture, "behind Flate with a predictor given by reference");
     // CCITT before another filter isn't a picture yet.
     let mut stream = with(false, i64::from(w), pdfcraft_filters::encode_flate(&g4));
     stream.dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("CCITTFaxDecode"), Object::name("FlateDecode")]));

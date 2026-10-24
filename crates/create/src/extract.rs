@@ -106,6 +106,8 @@ fn filters(s: &Stream) -> Vec<Vec<u8>> {
 /// each starting on a byte, with black as 0 unless `/BlackIs1` says 1, as `CCITTFaxDecode` gives
 /// them (ISO 32000-2 §7.4.6).
 fn decoded(doc: &Document, s: &Stream) -> Result<Vec<u8>, String> {
+    // Parameters given by reference, which the filters read only once direct.
+    let s = &*doc.with_direct_parms(s);
     let names = filters(s);
     match names.split_last() {
         Some((f, outer)) if f == b"CCITTFaxDecode" || f == b"CCF" => {
