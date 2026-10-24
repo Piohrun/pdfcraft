@@ -465,7 +465,8 @@ fn mono(doc: &Document, s: &Stream, compression: MonoCompression) -> Option<Stre
 /// `compression` asks (see [`mono`]), if that is smaller as stored. Lossless: a decode array maps
 /// 0 and 255 at eight bits as it maps 0 and 1 at one bit, so it stays. Left alone: indexed images
 /// (their samples are palette indices), a colour-key `/Mask` (its ranges are in eight-bit values),
-/// and everything when `compression` is Retain.
+/// and everything when `compression` is Retain: such an image is then a grey image like any other,
+/// which the grey settings handle as they did before.
 fn bilevel_grey(doc: &Document, s: &Stream, compression: MonoCompression) -> Option<Stream> {
     if compression == MonoCompression::Retain {
         return None;

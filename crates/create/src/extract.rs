@@ -169,15 +169,17 @@ fn ccitt(doc: &Document, s: &Stream) -> Result<Vec<u8>, String> {
         Some(Object::Bool(b)) => *b,
         _ => default,
     };
-    let k = p.int(b"K").unwrap_or(0);
+    let int = |key: &[u8]| p.get(key).and_then(|v| doc.resolve(v).as_int());
+    let k = int(b"K").unwrap_or(0);
     // A row is the image's width: that was checked against the export's size limit, so a hostile
     // /Columns can't size the buffers.
-    let columns = u32::try_from(p.int(b"Columns").unwrap_or(1728)).ok().filter(|c| *c > 0).ok_or("the fax image has no columns")?;
+    let columns = u32::try_from(int(b"Columns").unwrap_or(1728)).ok().filter(|c| *c > 0).ok_or("the fax image has no columns")?;
     if s.dict.int(b"Width") != Some(i64::from(columns)) {
         return Err("the fax image's columns aren't its width".into());
     }
-    let height = s.dict.int(b"Height").and_then(|h| u32::try_from(h).ok()).unwrap_or(0);
-    let rows = p.int(b"Rows").and_then(|r| u32::try_from(r).ok()).filter(|r| *r > 0).unwrap_or(height).min(height);
+    // As many rows as the image has, whatever /Rows says: one below /Height would cut the picture
+    // short, and rows past /Height aren't drawn.
+    let rows = s.dict.int(b"Height").and_then(|h| u32::try_from(h).ok()).unwrap_or(0);
     let settings = hayro_ccitt::DecodeSettings {
         columns,
         rows,
