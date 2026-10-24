@@ -359,6 +359,54 @@ fn black_and_white_images_become_ccitt_group_4() {
     assert!(render(&doc) == before, "the page looks the same");
 }
 
+/// An image whose /DecodeParms are a reference is read through them, as one with them direct: a
+/// predictor's tag bytes would otherwise shift every row, and the image would be stored again
+/// wrong. Here a 1-bit image with a PNG predictor (stored again as Group 4) and an eight-bit grey
+/// one with a PNG predictor at 600 ppi (resampled) come out byte for byte as with direct parameters.
+#[test]
+fn images_whose_decode_parms_are_references_come_out_as_with_them_direct() {
+    let build = |by_reference: bool| {
+        let mut doc = Document::new_empty();
+        let (w, h) = (1200u32, 480u32);
+        let grey = [("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))];
+        let one_bit = mono_image(&mut doc, w, h, &bilevel(w, h, false), Some(15), &grey);
+        let shades: Vec<u8> = (0..w * h).map(|i| ((i % w) * 255 / w) as u8 ^ ((i / w) as u8 & 0x0F)).collect();
+        let params = pdfcraft_filters::Params { predictor: 15, colors: 1, bits_per_component: 8, columns: w as i64, early_change: 1 };
+        let mut parms = Dict::new();
+        parms.set(b"Predictor".to_vec(), Object::Int(15));
+        parms.set(b"Columns".to_vec(), Object::Int(w as i64));
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w as i64));
+        d.set(b"Height".to_vec(), Object::Int(h as i64));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        let coded = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, &shades).unwrap();
+        let eight_bit = doc.add(Object::Stream(Stream::from_raw(d, coded)));
+        if by_reference {
+            for r in [one_bit, eight_bit] {
+                let mut s = stream(&doc, r);
+                let parms = s.dict.get(b"DecodeParms").cloned().unwrap();
+                s.dict.set(b"DecodeParms".to_vec(), Object::Ref(doc.add(parms)));
+                doc.set(r, Object::Stream(s));
+            }
+        }
+        // 300 × 120 pt is 288 ppi; 144 × 57.6 pt is 600 ppi.
+        page(&mut doc, &[("A", one_bit), ("B", eight_bit)], "q 300 0 0 120 20 600 cm /A Do Q q 144 0 0 57.6 20 400 cm /B Do Q");
+        let before = [one_bit, eight_bit].map(|r| stream(&doc, r).raw);
+        let r = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!((r.images_resampled, r.images_recompressed), (1, 1), "{r:?}");
+        let after = [one_bit, eight_bit].map(|r| stream(&doc, r));
+        assert!(before.iter().zip(&after).all(|(b, a)| *b != a.raw), "both stored again");
+        assert_eq!(after[0].dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]));
+        after.map(|s| s.raw)
+    };
+    assert_eq!(build(true), build(false));
+}
+
 #[test]
 fn settings_choose_what_happens() {
     let mut doc = Document::new_empty();

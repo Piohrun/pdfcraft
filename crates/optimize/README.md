@@ -26,7 +26,9 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   threshold are resampled with a bicubic (Catmull-Rom) filter to a target resolution and
   stored as JPEG (Acrobat's quality steps) or ZIP; soft masks are resampled with their image.
   An image is replaced only if the result is smaller. Left alone: CMYK and other colour spaces,
-  image masks, decode arrays, more than 8 bits, JPEG 2000, JBIG2 and CCITT.
+  image masks, decode arrays, more than 8 bits, JPEG 2000, JBIG2 and CCITT. Samples are read with
+  `/DecodeParms` given by reference too (`Document::with_direct_parms`), here and below: without
+  them a predictor's tag bytes would shift every row of an image written back.
 - **Monochrome images** (`Settings::mono`, CCITT Group 4 by default): a 1-bit image with one
   colour component (grey, indexed, a separation) or an image mask, stored with no filter or with
   general-purpose ones, is stored again as CCITT Group 4 (`pdfcraft_filters::encode_g4`) when
