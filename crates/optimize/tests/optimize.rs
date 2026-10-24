@@ -501,7 +501,7 @@ fn eight_bit_black_and_white_images_become_one_bit() {
 /// Group 4 (alone and behind ASCIIHexDecode), an image mask (its inverting decode array stays) and
 /// eight-bit grey of only black and white, all drawn at 600 ppi, are stored at half the size (as
 /// Group 4, or 1-bit Flate when that is smaller, as it is on this clean text), each new pixel the
-/// majority of the 2 × 2 it covers (a tie black). Left at their size: an image at 400 ppi (stored
+/// majority of the 2 × 2 it covers (a tie black, or for the mask painted). Left at their size: an image at 400 ppi (stored
 /// again as Group 4), a Group 4 one at 400 ppi (not even decoded), one behind ASCIIHexDecode at
 /// 400 ppi (stored again as Group 4 alone), and one with a soft mask. The page looks the same at
 /// screen size. With `downsample` off nothing is resampled; with Retain, Flate stays Flate, CCITT
@@ -576,18 +576,24 @@ fn black_and_white_images_above_450_ppi_are_averaged_down_to_300() {
         let d = stream(doc, r).dict;
         (d.int(b"Width").unwrap(), d.int(b"Height").unwrap())
     };
-    // Each new pixel: 1 when more than two of the 2 × 2 it covers are.
+    // Each new pixel: 1 when more than two of the 2 × 2 it covers are, or two when 1 is the dark
+    // sample (the mask's decode array inverts it, so its painted part is 1).
     let stride = (w as usize).div_ceil(8);
     let bit = |x: usize, y: usize| text[y * stride + x / 8] & (0x80 >> (x % 8)) != 0;
-    let mut halved = vec![0u8; (w as usize / 2).div_ceil(8) * h as usize / 2];
-    for y in 0..h as usize / 2 {
-        for x in 0..w as usize / 2 {
-            let ones = [(0, 0), (1, 0), (0, 1), (1, 1)].iter().filter(|(dx, dy)| bit(2 * x + dx, 2 * y + dy)).count();
-            if ones > 2 {
-                halved[y * (w as usize / 2).div_ceil(8) + x / 8] |= 0x80 >> (x % 8);
+    let halve = |dark_one: bool| {
+        let mut out = vec![0u8; (w as usize / 2).div_ceil(8) * h as usize / 2];
+        for y in 0..h as usize / 2 {
+            for x in 0..w as usize / 2 {
+                let ones = [(0, 0), (1, 0), (0, 1), (1, 1)].iter().filter(|(dx, dy)| bit(2 * x + dx, 2 * y + dy)).count();
+                if ones > 2 || (dark_one && ones == 2) {
+                    out[y * (w as usize / 2).div_ceil(8) + x / 8] |= 0x80 >> (x % 8);
+                }
             }
         }
-    }
+        out
+    };
+    let (halved, halved_mask) = (halve(false), halve(true));
+    assert_ne!(halved, halved_mask, "the picture has ties");
 
     let mut off = doc.clone();
     let r = optimize(&mut off, &Settings { mono: MonoSettings { downsample: false, ..MonoSettings::REDUCE }, ..Settings::default() }).unwrap();
@@ -615,7 +621,7 @@ fn black_and_white_images_above_450_ppi_are_averaged_down_to_300() {
         let s = stream(&doc, i);
         assert_eq!((size(&doc, i), s.dict.int(b"BitsPerComponent")), ((600, 240), if i == mask { None } else { Some(1) }));
         assert!(matches!(s.dict.name(b"Filter"), Some(b"CCITTFaxDecode" | b"FlateDecode")), "{i:?}");
-        assert_eq!(doc.decoded_image(&s).unwrap(), halved, "{i:?}");
+        assert_eq!(doc.decoded_image(&s).unwrap(), if i == mask { halved_mask.clone() } else { halved.clone() }, "{i:?}");
     }
     assert_eq!(stream(&doc, mask).dict.get(b"Decode"), Some(&decode), "the decode array stays");
     for i in [at_400, soft, hex_at_400] {

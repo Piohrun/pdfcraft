@@ -475,11 +475,34 @@ fn one_bit(doc: &Document, s: &Stream, eight_bit: bool) -> Option<(Vec<u8>, u32,
     Some((packed, w, h, true))
 }
 
+/// Whether sample 1 is the dark one of the 1-bit image `d` describes, after its decode array
+/// (`[0 1]` when it has none of two numbers): the painted part of an image mask and black in grey
+/// decode to 0, and full ink in a separation (or a DeviceN of one colourant) to 1. An indexed image
+/// says 0, as its palette, not its decode array, says which entry is darker.
+fn dark_is_one(doc: &Document, d: &Dict) -> bool {
+    let number = |v: Option<&Object>| v.and_then(|v| doc.resolve(v).as_f64());
+    let (d0, d1) = match d.get(b"Decode").map(|v| doc.resolve(v)).as_deref() {
+        Some(Object::Array(a)) => number(a.first()).zip(number(a.get(1))).unwrap_or((0.0, 1.0)),
+        _ => (0.0, 1.0),
+    };
+    if matches!(d.get(b"ImageMask"), Some(Object::Bool(true))) {
+        return d1 < d0;
+    }
+    match d.get(b"ColorSpace").map(|cs| doc.resolve(cs)).as_deref() {
+        Some(Object::Array(a)) => match a.first().and_then(Object::as_name) {
+            Some(b"Indexed" | b"I") => false,
+            Some(b"Separation" | b"DeviceN") => d1 > d0,
+            _ => d1 < d0,
+        },
+        _ => d1 < d0,
+    }
+}
+
 /// `w` × `h` 1-bit rows (each starting on a new byte) averaged down to `nw` × `nh`, no larger:
-/// each new pixel takes the sample that covers more of its area, and a 0 when the two tie. A 0 is
-/// black in grey and the painted part of an image mask, so a dark line half a new pixel wide stays.
-/// `None` when the rows are short or the new size isn't smaller in both directions or empty.
-pub(crate) fn downsample_bits(data: &[u8], w: u32, h: u32, nw: u32, nh: u32) -> Option<Vec<u8>> {
+/// each new pixel takes the sample that covers more of its area, and the dark one when the two tie
+/// (1 if `dark_is_one`, see [`dark_is_one`]), so a dark line half a new pixel wide stays. `None`
+/// when the rows are short or the new size isn't smaller in both directions or empty.
+pub(crate) fn downsample_bits(data: &[u8], w: u32, h: u32, nw: u32, nh: u32, dark_is_one: bool) -> Option<Vec<u8>> {
     if nw == 0 || nh == 0 || nw > w || nh > h {
         return None;
     }
@@ -510,8 +533,10 @@ pub(crate) fn downsample_bits(data: &[u8], w: u32, h: u32, nw: u32, nh: u32) -> 
             let covered: u64 = (x0 / nw..x1.div_ceil(nw).min(w))
                 .map(|x| overlap(x0, x1, x * nw, (x + 1) * nw) * usize::try_from(x).ok().and_then(|x| ones.get(x)).copied().unwrap_or(0))
                 .sum();
-            // More than half of w·h, which can't overflow (w·h < 2^64 for u32 sizes).
-            if covered > w * h / 2 {
+            // Against what the 0 samples cover: covered is at most w·h, which can't overflow
+            // (w·h < 2^64 for u32 sizes).
+            let zeros = w * h - covered;
+            if covered > zeros || (dark_is_one && covered == zeros) {
                 let i = usize::try_from(i).ok()?;
                 *out_row.get_mut(i / 8)? |= 0x80 >> (i % 8);
             }
@@ -554,7 +579,7 @@ fn mono(doc: &Document, s: &Stream, ppi: f64, settings: &MonoSettings) -> Option
     if (retain || fax_alone) && !resampled {
         return None;
     }
-    let data = if resampled { downsample_bits(&data, w, h, nw, nh)? } else { data };
+    let data = if resampled { downsample_bits(&data, w, h, nw, nh, dark_is_one(doc, d))? } else { data };
     let mut dict = d.clone();
     for key in [&b"Filter"[..], b"DecodeParms", b"Length", b"DL"] {
         dict.remove(key);
@@ -697,10 +722,11 @@ mod tests {
 
 #[cfg(test)]
 mod downsample_tests {
-    use super::downsample_bits;
+    use super::{dark_is_one, downsample_bits};
+    use pdfcraft_cos::{Dict, Document, Object};
 
     /// [`downsample_bits`] the slow way: each new pixel's area against every source pixel's.
-    fn naive(data: &[u8], w: u32, h: u32, nw: u32, nh: u32) -> Vec<u8> {
+    fn naive(data: &[u8], w: u32, h: u32, nw: u32, nh: u32, dark_one: bool) -> Vec<u8> {
         let (stride, nstride) = ((w as usize).div_ceil(8), (nw as usize).div_ceil(8));
         let (w, h, nw, nh) = (u64::from(w), u64::from(h), u64::from(nw), u64::from(nh));
         let mut out = vec![0u8; nstride * nh as usize];
@@ -716,7 +742,7 @@ mod downsample_tests {
                         }
                     }
                 }
-                if 2 * ones > w * h {
+                if 2 * ones > w * h || (dark_one && 2 * ones == w * h) {
                     out[j as usize * nstride + i as usize / 8] |= 0x80 >> (i % 8);
                 }
             }
@@ -727,28 +753,65 @@ mod downsample_tests {
     #[test]
     fn each_new_pixel_takes_the_sample_covering_more_of_it() {
         // 4 × 2 to 2 × 1: three 1s of four on the left, none on the right.
-        assert_eq!(downsample_bits(&[0b1100_0000, 0b1000_0000], 4, 2, 2, 1), Some(vec![0b1000_0000]));
-        // A tie gives 0: black in grey, so a black line half a new pixel wide stays (the second
-        // of four white columns is black); a white one that thin on black doesn't.
-        assert_eq!(downsample_bits(&[0b1011_0000, 0b1011_0000], 4, 2, 2, 1), Some(vec![0b0100_0000]));
-        assert_eq!(downsample_bits(&[0b0100_0000, 0b0100_0000], 4, 2, 2, 1), Some(vec![0]));
+        assert_eq!(downsample_bits(&[0b1100_0000, 0b1000_0000], 4, 2, 2, 1, false), Some(vec![0b1000_0000]));
+        // A tie gives the dark sample: 0, black in grey, so a black line half a new pixel wide
+        // stays (the second of four white columns is black); a white one that thin on black doesn't.
+        assert_eq!(downsample_bits(&[0b1011_0000, 0b1011_0000], 4, 2, 2, 1, false), Some(vec![0b0100_0000]));
+        assert_eq!(downsample_bits(&[0b0100_0000, 0b0100_0000], 4, 2, 2, 1, false), Some(vec![0]));
+        // With 1 the dark sample (an inverting decode array, a separation), that line is a 1.
+        assert_eq!(downsample_bits(&[0b0100_0000, 0b0100_0000], 4, 2, 2, 1, true), Some(vec![0b1000_0000]));
+        assert_eq!(downsample_bits(&[0b1011_0000, 0b1011_0000], 4, 2, 2, 1, true), Some(vec![0b1100_0000]));
         // The same size gives the same bits; padding bits are 0.
-        assert_eq!(downsample_bits(&[0b1010_1111], 3, 1, 3, 1), Some(vec![0b1010_0000]));
+        assert_eq!(downsample_bits(&[0b1010_1111], 3, 1, 3, 1, false), Some(vec![0b1010_0000]));
         // 3 to 2 across: the middle column counts half to each new one.
-        assert_eq!(downsample_bits(&[0b1100_0000], 3, 1, 2, 1), Some(vec![0b1000_0000]));
+        assert_eq!(downsample_bits(&[0b1100_0000], 3, 1, 2, 1, false), Some(vec![0b1000_0000]));
+    }
+
+    /// The dark sample: 0 in grey and of an image mask, 1 in a separation, each the other way round
+    /// with an inverting decode array; 0 for an indexed image, whatever its decode array.
+    #[test]
+    fn the_dark_sample_follows_the_colour_space_and_decode_array() {
+        let doc = Document::new_empty();
+        let image = |entries: &[(&str, Object)]| {
+            let mut d = Dict::new();
+            for (k, v) in entries {
+                d.set(k.as_bytes().to_vec(), v.clone());
+            }
+            d
+        };
+        let inverted = ("Decode", Object::Array(vec![1.into(), 0.into()]));
+        let grey = ("ColorSpace", Object::name("DeviceGray"));
+        let mask = ("ImageMask", Object::Bool(true));
+        let separation =
+            ("ColorSpace", Object::Array(vec![Object::name("Separation"), Object::name("Spot"), Object::name("DeviceCMYK"), Object::Null]));
+        let indexed = ("ColorSpace", Object::Array(vec![Object::name("Indexed"), Object::name("DeviceGray"), 1.into(), Object::Null]));
+        for (entries, dark_one) in [
+            (vec![grey.clone()], false),
+            (vec![grey, inverted.clone()], true),
+            (vec![mask.clone()], false),
+            (vec![mask, inverted.clone()], true),
+            (vec![separation.clone()], true),
+            (vec![separation, inverted.clone()], false),
+            (vec![indexed.clone()], false),
+            (vec![indexed, inverted], false),
+            (vec![("ColorSpace", Object::name("DeviceGray")), ("Decode", Object::Array(vec![Object::name("x"), 0.into()]))], false),
+        ] {
+            assert_eq!(dark_is_one(&doc, &image(&entries)), dark_one, "{entries:?}");
+        }
     }
 
     #[test]
     fn what_it_cannot_resample_is_none() {
-        assert_eq!(downsample_bits(&[0; 2], 4, 2, 5, 1), None, "wider");
-        assert_eq!(downsample_bits(&[0; 2], 4, 2, 2, 3), None, "taller");
-        assert_eq!(downsample_bits(&[0; 2], 4, 2, 0, 1), None);
-        assert_eq!(downsample_bits(&[0; 1], 4, 2, 2, 1), None, "short rows");
-        assert_eq!(downsample_bits(&[], u32::MAX, u32::MAX, 1, 1), None);
+        assert_eq!(downsample_bits(&[0; 2], 4, 2, 5, 1, false), None, "wider");
+        assert_eq!(downsample_bits(&[0; 2], 4, 2, 2, 3, false), None, "taller");
+        assert_eq!(downsample_bits(&[0; 2], 4, 2, 0, 1, false), None);
+        assert_eq!(downsample_bits(&[0; 1], 4, 2, 2, 1, false), None, "short rows");
+        assert_eq!(downsample_bits(&[], u32::MAX, u32::MAX, 1, 1, true), None);
     }
 
     proptest::proptest! {
-        /// Any bitmap, to any size no larger, gives what the slow way gives; all 1s stay all 1s.
+        /// Any bitmap, to any size no larger, with either sample the dark one, gives what the slow
+        /// way gives; all 1s stay all 1s.
         #[test]
         fn it_matches_the_slow_way(
             w in 1u32..40,
@@ -756,14 +819,15 @@ mod downsample_tests {
             nw_part in 0.0f64..1.0,
             nh_part in 0.0f64..1.0,
             seed in proptest::collection::vec(0u8..=255, 1..64),
+            dark_one: bool,
         ) {
             let (nw, nh) = (1 + (f64::from(w - 1) * nw_part) as u32, 1 + (f64::from(h - 1) * nh_part) as u32);
             let len = (w as usize).div_ceil(8) * h as usize;
             let data: Vec<u8> = seed.iter().cycle().take(len).copied().collect();
-            proptest::prop_assert_eq!(downsample_bits(&data, w, h, nw, nh), Some(naive(&data, w, h, nw, nh)));
-            let white = downsample_bits(&vec![0xFF; len], w, h, nw, nh).unwrap();
-            proptest::prop_assert_eq!(white, naive(&vec![0xFF; len], w, h, nw, nh));
-            proptest::prop_assert!(naive(&vec![0xFF; len], w, h, nw, nh).iter().any(|b| *b != 0));
+            proptest::prop_assert_eq!(downsample_bits(&data, w, h, nw, nh, dark_one), Some(naive(&data, w, h, nw, nh, dark_one)));
+            let white = downsample_bits(&vec![0xFF; len], w, h, nw, nh, dark_one).unwrap();
+            proptest::prop_assert_eq!(white, naive(&vec![0xFF; len], w, h, nw, nh, dark_one));
+            proptest::prop_assert!(naive(&vec![0xFF; len], w, h, nw, nh, dark_one).iter().any(|b| *b != 0));
         }
     }
 }

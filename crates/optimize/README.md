@@ -36,8 +36,10 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   only 0 and 255, packed to one bit (not an indexed image, whose samples are palette indices, nor
   one with a colour-key `/Mask`).
   - **Downsampling:** one whose effective resolution is above `above_ppi` is averaged down to
-    `target_ppi`: each new pixel takes the sample covering more of its area, a 0 (black in grey)
-    on a tie, so a dark line half a new pixel wide stays. Not one with a soft mask, whose own size
+    `target_ppi`: each new pixel takes the sample covering more of its area, and the dark one on a
+    tie, so a dark line half a new pixel wide stays: black in grey and the painted part of an image
+    mask (a 0, or a 1 with an inverting decode array), full ink in a separation (a 1, or a 0), and
+    entry 0 of an indexed image, whose palette says which is darker. Not one with a soft mask, whose own size
     would have to follow. On a 600 ppi text page, Group 4 at 300 ppi is half the size.
   - **Compression:** CCITT Group 4 (`pdfcraft_filters::encode_g4`), or 1-bit Flate when that is
     smaller, which only a resampled image or one packed from eight bits may be: a 1-bit image that
