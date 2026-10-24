@@ -32,9 +32,13 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
 - **Monochrome images** (`Settings::mono`, `MonoSettings::REDUCE` by default: to 300 ppi above
   450 ppi, CCITT Group 4). Black-and-white images are a 1-bit image with one colour component
   (grey, indexed, a separation) or an image mask, stored with no filter, with general-purpose ones
-  or with CCITT fax after any of those (decoded by `Document::decoded_image`), and an eight-bit grey image of
-  only 0 and 255, packed to one bit (not an indexed image, whose samples are palette indices, nor
-  one with a colour-key `/Mask`).
+  or with CCITT fax after any of those (decoded by `Document::decoded_image`). Packed to one bit
+  first, unless a colour-key `/Mask` is in the image's own values: eight-bit grey of only 0 and 255;
+  eight-bit `DeviceRGB` of only black and white, which becomes `DeviceGray` (not calibrated RGB or
+  RGB with a profile); and an indexed image of 2, 4 or 8 bits that uses only palette entries 0 and
+  1, which keeps its palette, whatever its two colours. A decode array stays when it means the same
+  at one bit (grey's, or RGB's if the same for each component, as grey's); otherwise the image is
+  left alone.
   - **Downsampling:** one whose effective resolution is above `above_ppi` is averaged down to
     `target_ppi`: each new pixel takes the sample covering more of its area, and the dark one on a
     tie, so a dark line half a new pixel wide stays: black in grey and the painted part of an image

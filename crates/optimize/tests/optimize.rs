@@ -366,7 +366,8 @@ fn black_and_white_images_become_ccitt_group_4() {
 /// wrong. Here a 1-bit image with a PNG predictor (stored again as Group 4), an eight-bit grey
 /// one with a PNG predictor at 600 ppi (resampled), and an eight-bit one of only black and white
 /// with PNG predictor 10 (each row's tag a 0, so the shifted rows would still be black and white;
-/// packed to one bit) come out byte for byte as with direct parameters.
+/// packed to one bit), and a two-entry indexed one the same way, come out byte for byte as with
+/// direct parameters.
 #[test]
 fn images_whose_decode_parms_are_references_come_out_as_with_them_direct() {
     let build = |by_reference: bool| {
@@ -397,9 +398,22 @@ fn images_whose_decode_parms_are_references_come_out_as_with_them_direct() {
         parms.set(b"Columns".to_vec(), Object::Int(w as i64));
         d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
         let black_and_white = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, &black_and_white_samples).unwrap();
-        let packed = doc.add(Object::Stream(Stream::from_raw(d, black_and_white)));
+        let packed = doc.add(Object::Stream(Stream::from_raw(d.clone(), black_and_white)));
+        let palette = vec![0, 0, 255, 255, 255, 255];
+        d.set(
+            b"ColorSpace".to_vec(),
+            Object::Array(vec![
+                Object::name("Indexed"),
+                Object::name("DeviceRGB"),
+                1.into(),
+                Object::String(pdfcraft_cos::PdfString::literal(palette)),
+            ]),
+        );
+        let entries = samples_of(&bilevel(w, h, false), w, h, [&[0], &[1]], 8);
+        let entries = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, &entries).unwrap();
+        let indexed = doc.add(Object::Stream(Stream::from_raw(d, entries)));
         if by_reference {
-            for r in [one_bit, eight_bit, packed] {
+            for r in [one_bit, eight_bit, packed, indexed] {
                 let mut s = stream(&doc, r);
                 let parms = s.dict.get(b"DecodeParms").cloned().unwrap();
                 s.dict.set(b"DecodeParms".to_vec(), Object::Ref(doc.add(parms)));
@@ -409,16 +423,19 @@ fn images_whose_decode_parms_are_references_come_out_as_with_them_direct() {
         // 300 × 120 pt is 288 ppi; 144 × 57.6 pt is 600 ppi.
         page(
             &mut doc,
-            &[("A", one_bit), ("B", eight_bit), ("C", packed)],
-            "q 300 0 0 120 20 600 cm /A Do Q q 144 0 0 57.6 20 400 cm /B Do Q q 300 0 0 120 20 200 cm /C Do Q",
+            &[("A", one_bit), ("B", eight_bit), ("C", packed), ("D", indexed)],
+            "q 300 0 0 120 20 600 cm /A Do Q q 144 0 0 57.6 20 400 cm /B Do Q q 300 0 0 120 20 200 cm /C Do Q \
+             q 280 0 0 112 325 200 cm /D Do Q",
         );
-        let before = [one_bit, eight_bit, packed].map(|r| stream(&doc, r).raw);
+        let before = [one_bit, eight_bit, packed, indexed].map(|r| stream(&doc, r).raw);
         let r = optimize(&mut doc, &Settings::default()).unwrap();
-        assert_eq!((r.images_resampled, r.images_recompressed), (1, 2), "{r:?}");
-        let after = [one_bit, eight_bit, packed].map(|r| stream(&doc, r));
+        assert_eq!((r.images_resampled, r.images_recompressed), (1, 3), "{r:?}");
+        let after = [one_bit, eight_bit, packed, indexed].map(|r| stream(&doc, r));
         assert!(before.iter().zip(&after).all(|(b, a)| *b != a.raw), "all stored again");
         assert_eq!(after[0].dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]));
-        assert_eq!((after[2].dict.int(b"BitsPerComponent"), after[2].dict.name(b"Filter")), (Some(1), Some(&b"CCITTFaxDecode"[..])));
+        for s in &after[2..] {
+            assert_eq!((s.dict.int(b"BitsPerComponent"), s.dict.name(b"Filter")), (Some(1), Some(&b"CCITTFaxDecode"[..])));
+        }
         after.map(|s| s.raw)
     };
     assert_eq!(build(true), build(false));
@@ -497,15 +514,129 @@ fn eight_bit_black_and_white_images_become_one_bit() {
     assert!(render(&doc) == before, "the page looks the same");
 }
 
+/// `bits` (1-bit rows) with each 0 as `values[0]` and each 1 as `values[1]`, at `bpc` bits a sample
+/// (each row starting on a new byte).
+fn samples_of(bits: &[u8], w: u32, h: u32, values: [&[u8]; 2], bpc: usize) -> Vec<u8> {
+    let (w, h) = (w as usize, h as usize);
+    let stride = w.div_ceil(8);
+    let mut out = Vec::new();
+    for y in 0..h {
+        let row: Vec<u8> = (0..w).flat_map(|x| values[usize::from(bits[y * stride + x / 8] & (0x80 >> (x % 8)) != 0)].iter().copied()).collect();
+        let mut packed = vec![0u8; (row.len() * bpc).div_ceil(8)];
+        for (i, s) in row.iter().enumerate() {
+            packed[i * bpc / 8] |= if bpc == 8 { *s } else { s << (8 - bpc - i * bpc % 8) };
+        }
+        out.extend(packed);
+    }
+    out
+}
+
+/// Eight-bit RGB of only black and white becomes one-bit grey, and an indexed image that uses only
+/// palette entries 0 and 1 becomes one bit with its palette (here blue and white), at 8 bits or 4,
+/// both as Group 4 and losslessly: the page looks the same to the pixel. An RGB decode array the
+/// same for each component becomes grey's, and an indexed image's default one goes. Not touched:
+/// RGB with any other colour, a decode array that differs between components, a colour-key mask or
+/// calibrated RGB; an indexed image that uses a third entry or has another decode array; and
+/// everything with `mono: Retain`.
+#[test]
+fn rgb_and_two_colour_indexed_black_and_white_images_become_one_bit() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200u32, 480u32);
+    let text = bilevel(w, h, false);
+    let image = |doc: &mut Document, data: &[u8], bpc: i64, cs: Object, entries: &[(&str, Object)]| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w.into()));
+        d.set(b"Height".to_vec(), Object::Int(h.into()));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(bpc));
+        d.set(b"ColorSpace".to_vec(), cs);
+        for (k, v) in entries {
+            d.set(k.as_bytes().to_vec(), v.clone());
+        }
+        doc.add(Object::Stream(Stream::flate(d, data)))
+    };
+    let rgb_cs = Object::name("DeviceRGB");
+    let rgb_data = samples_of(&text, w, h, [&[0, 0, 0], &[255, 255, 255]], 8);
+    let rgb = image(&mut doc, &rgb_data, 8, rgb_cs.clone(), &[]);
+    let pairs = |p: [i64; 6]| Object::Array(p.into_iter().map(Object::Int).collect());
+    let rgb_inverted = image(&mut doc, &rgb_data, 8, rgb_cs.clone(), &[("Decode", pairs([1, 0, 1, 0, 1, 0]))]);
+    let rgb_mixed = image(&mut doc, &rgb_data, 8, rgb_cs.clone(), &[("Decode", pairs([1, 0, 0, 1, 0, 1]))]);
+    let mut red = rgb_data.clone();
+    red[3000..3003].copy_from_slice(&[255, 0, 0]);
+    let rgb_red = image(&mut doc, &red, 8, rgb_cs.clone(), &[]);
+    let mut white_point = Dict::new();
+    white_point.set(b"WhitePoint".to_vec(), Object::Array(vec![Object::Real(0.9505), 1.into(), Object::Real(1.089)]));
+    let cal_rgb = image(&mut doc, &rgb_data, 8, Object::Array(vec![Object::name("CalRGB"), Object::Dict(white_point)]), &[]);
+    let rgb_keyed = image(&mut doc, &rgb_data, 8, rgb_cs, &[("Mask", pairs([0, 0, 0, 0, 0, 0]))]);
+    let palette = |entries: &[u8]| {
+        Object::Array(vec![
+            Object::name("Indexed"),
+            Object::name("DeviceRGB"),
+            (entries.len() as i64 / 3 - 1).into(),
+            Object::String(pdfcraft_cos::PdfString::literal(entries.to_vec())),
+        ])
+    };
+    let blue_white = palette(&[0, 0, 255, 255, 255, 255]);
+    let indices = samples_of(&text, w, h, [&[0], &[1]], 8);
+    let blue = image(&mut doc, &indices, 8, blue_white.clone(), &[]);
+    let default_decode = Object::Array(vec![0.into(), 255.into()]);
+    let blue_decoded = image(&mut doc, &indices, 8, blue_white.clone(), &[("Decode", default_decode)]);
+    let blue_4 = image(&mut doc, &samples_of(&text, w, h, [&[0], &[1]], 4), 4, blue_white.clone(), &[]);
+    let mut third = indices.clone();
+    third[3000] = 2;
+    let three = image(&mut doc, &third, 8, palette(&[0, 0, 255, 255, 255, 255, 255, 0, 0]), &[]);
+    let other_decode = image(&mut doc, &indices, 8, blue_white.clone(), &[("Decode", Object::Array(vec![0.into(), 1.into()]))]);
+    let all = [rgb, rgb_inverted, rgb_mixed, rgb_red, cal_rgb, rgb_keyed, blue, blue_decoded, blue_4, three, other_decode];
+    // 200 × 80 pt is 432 ppi: below where monochrome downsampling starts.
+    let names: Vec<String> = (0..all.len()).map(|i| format!("Im{i}")).collect();
+    let content: String =
+        (0..all.len()).map(|i| format!("q 200 0 0 80 {} {} cm /Im{i} Do Q ", 6 + 200 * (i % 3), 690 - 100 * (i / 3) as i64)).collect();
+    page(&mut doc, &names.iter().map(String::as_str).zip(all).collect::<Vec<_>>(), &content);
+    let before = render(&doc);
+    let raw = |doc: &Document, r: ObjRef| stream(doc, r).raw;
+    // Colour and grey settings that leave images alone, so only this conversion acts.
+    let keep = ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain };
+    let settings = Settings { color: keep, gray: keep, ..Settings::default() };
+
+    let mut kept = doc.clone();
+    let r = optimize(&mut kept, &Settings { mono: RETAIN, ..settings.clone() }).unwrap();
+    assert_eq!((r.images_resampled, r.images_recompressed), (0, 0), "Retain keeps every image as it is");
+
+    let untouched = [rgb_mixed, rgb_red, cal_rgb, rgb_keyed, three, other_decode].map(|r| raw(&doc, r));
+    let r = optimize(&mut doc, &settings).unwrap();
+    assert_eq!((r.images_resampled, r.images_recompressed), (0, 5), "{r:?}");
+    for (i, cs) in [
+        (rgb, Object::name("DeviceGray")),
+        (rgb_inverted, Object::name("DeviceGray")),
+        (blue, blue_white.clone()),
+        (blue_decoded, blue_white.clone()),
+        (blue_4, blue_white),
+    ] {
+        let s = stream(&doc, i);
+        assert_eq!(
+            (s.dict.int(b"BitsPerComponent"), s.dict.name(b"Filter"), s.dict.get(b"ColorSpace")),
+            (Some(1), Some(&b"CCITTFaxDecode"[..]), Some(&cs)),
+            "{i:?}"
+        );
+        assert_eq!(doc.decoded_image(&s).unwrap(), text, "{i:?}");
+        let decode = if i == rgb_inverted { Some(Object::Array(vec![1.into(), 0.into()])) } else { None };
+        assert_eq!(s.dict.get(b"Decode").cloned(), decode, "{i:?}");
+    }
+    assert_eq!([rgb_mixed, rgb_red, cal_rgb, rgb_keyed, three, other_decode].map(|r| raw(&doc, r)), untouched);
+    assert!(render(&doc) == before, "the page looks the same");
+}
+
 /// Black-and-white images above 450 ppi are averaged down to 300 ppi, by default: 1-bit Flate, CCITT
-/// Group 4 (alone and behind ASCIIHexDecode), an image mask (its inverting decode array stays) and
-/// eight-bit grey of only black and white, all drawn at 600 ppi, are stored at half the size (as
+/// Group 4 (alone and behind ASCIIHexDecode), an image mask (its inverting decode array stays), and
+/// eight-bit grey and RGB of only black and white (the RGB also the other way round, with a decode
+/// array that inverts it, so its ties are 1s), all drawn at 600 ppi, are stored at half the size (as
 /// Group 4, or 1-bit Flate when that is smaller, as it is on this clean text), each new pixel the
 /// majority of the 2 × 2 it covers (a tie black, or for the mask painted). Left at their size: an image at 400 ppi (stored
 /// again as Group 4), a Group 4 one at 400 ppi (not even decoded), one behind ASCIIHexDecode at
 /// 400 ppi (stored again as Group 4 alone), and one with a soft mask. The page looks the same at
 /// screen size. With `downsample` off nothing is resampled; with Retain, Flate stays Flate, CCITT
-/// stays CCITT, and eight-bit grey is left to the grey settings.
+/// stays CCITT, and eight-bit grey and RGB are left to the grey and colour settings.
 #[test]
 fn black_and_white_images_above_450_ppi_are_averaged_down_to_300() {
     let mut doc = Document::new_empty();
@@ -551,7 +682,11 @@ fn black_and_white_images_above_450_ppi_are_averaged_down_to_300() {
     d.set(b"Height".to_vec(), Object::Int(h.into()));
     d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
     d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
-    let eight = doc.add(Object::Stream(Stream::flate(d, &eight_bit(&text, w, h))));
+    let eight = doc.add(Object::Stream(Stream::flate(d.clone(), &eight_bit(&text, w, h))));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    let rgb = doc.add(Object::Stream(Stream::flate(d.clone(), &samples_of(&text, w, h, [&[0, 0, 0], &[255, 255, 255]], 8))));
+    d.set(b"Decode".to_vec(), Object::Array([1, 0, 1, 0, 1, 0].map(Object::Int).to_vec()));
+    let rgb_inverted = doc.add(Object::Stream(Stream::flate(d, &samples_of(&text, w, h, [&[255, 255, 255], &[0, 0, 0]], 8))));
     let at_400 = mono_image(&mut doc, w, h, &text, None, &grey);
     let fax_at_400 = g4(&mut doc, &grey);
     let mut sm = Dict::new();
@@ -565,10 +700,23 @@ fn black_and_white_images_above_450_ppi_are_averaged_down_to_300() {
     // 144 × 57.6 pt is 2 × 0.8 in: 600 ppi. 216 × 86.4 pt is 400 ppi.
     page(
         &mut doc,
-        &[("A", flate), ("B", fax), ("C", mask), ("D", eight), ("E", at_400), ("F", fax_at_400), ("G", soft), ("H", hex_fax), ("I", hex_at_400)],
+        &[
+            ("A", flate),
+            ("B", fax),
+            ("C", mask),
+            ("D", eight),
+            ("E", at_400),
+            ("F", fax_at_400),
+            ("G", soft),
+            ("H", hex_fax),
+            ("I", hex_at_400),
+            ("J", rgb),
+            ("K", rgb_inverted),
+        ],
         "q 144 0 0 57.6 20 700 cm /A Do Q q 144 0 0 57.6 200 700 cm /B Do Q q 0 0 1 rg 144 0 0 57.6 380 700 cm /C Do Q \
          q 144 0 0 57.6 20 600 cm /D Do Q q 216 0 0 86.4 200 580 cm /E Do Q q 216 0 0 86.4 20 480 cm /F Do Q \
-         q 144 0 0 57.6 260 480 cm /G Do Q q 144 0 0 57.6 430 600 cm /H Do Q q 216 0 0 86.4 20 360 cm /I Do Q",
+         q 144 0 0 57.6 260 480 cm /G Do Q q 144 0 0 57.6 430 600 cm /H Do Q q 216 0 0 86.4 20 360 cm /I Do Q q 144 0 0 57.6 260 380 cm /J Do Q \
+         q 144 0 0 57.6 430 480 cm /K Do Q",
     );
     let before = render(&doc);
     let raw = |doc: &Document, r: ObjRef| stream(doc, r).raw;
@@ -598,11 +746,12 @@ fn black_and_white_images_above_450_ppi_are_averaged_down_to_300() {
     let mut off = doc.clone();
     let r = optimize(&mut off, &Settings { mono: MonoSettings { downsample: false, ..MonoSettings::REDUCE }, ..Settings::default() }).unwrap();
     assert_eq!(r.images_resampled, 0, "{r:?}");
-    assert!([flate, fax, mask, eight, hex_fax].iter().all(|i| size(&off, *i) == (1200, 480)));
+    assert!([flate, fax, mask, eight, hex_fax, rgb, rgb_inverted].iter().all(|i| size(&off, *i) == (1200, 480)));
 
     let mut kept = doc.clone();
     let r = optimize(&mut kept, &Settings { mono: RETAIN, ..Settings::default() }).unwrap();
-    assert_eq!(r.images_resampled, 5, "{r:?}");
+    // Not the inverted RGB: the colour settings leave an image with a decode array alone.
+    assert_eq!(r.images_resampled, 6, "{r:?}");
     assert_eq!(stream(&kept, flate).dict.name(b"Filter"), Some(&b"FlateDecode"[..]), "Retain: Flate stays Flate");
     for i in [fax, hex_fax] {
         assert_eq!(stream(&kept, i).dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]), "and CCITT stays CCITT: {i:?}");
@@ -611,19 +760,30 @@ fn black_and_white_images_above_450_ppi_are_averaged_down_to_300() {
     for i in [flate, fax, hex_fax] {
         assert_eq!((size(&kept, i), kept.decoded_image(&stream(&kept, i)).unwrap()), ((600, 240), halved.clone()), "{i:?}");
     }
-    assert_eq!(stream(&kept, eight).dict.int(b"BitsPerComponent"), Some(8), "Retain leaves eight bits to the grey settings");
+    for i in [eight, rgb, rgb_inverted] {
+        assert_eq!(stream(&kept, i).dict.int(b"BitsPerComponent"), Some(8), "Retain leaves eight bits to the grey and colour settings");
+    }
 
     let untouched = [fax_at_400].map(|r| raw(&doc, r));
     let hex_len = raw(&doc, hex_at_400).len();
     let r = optimize(&mut doc, &Settings::default()).unwrap();
-    assert_eq!((r.images_resampled, r.images_recompressed), (5, 3), "{r:?}");
-    for i in [flate, fax, mask, eight, hex_fax] {
+    assert_eq!((r.images_resampled, r.images_recompressed), (7, 3), "{r:?}");
+    assert_eq!(stream(&doc, rgb).dict.get(b"ColorSpace"), Some(&Object::name("DeviceGray")));
+    for i in [flate, fax, mask, eight, hex_fax, rgb] {
         let s = stream(&doc, i);
         assert_eq!((size(&doc, i), s.dict.int(b"BitsPerComponent")), ((600, 240), if i == mask { None } else { Some(1) }));
         assert!(matches!(s.dict.name(b"Filter"), Some(b"CCITTFaxDecode" | b"FlateDecode")), "{i:?}");
         assert_eq!(doc.decoded_image(&s).unwrap(), if i == mask { halved_mask.clone() } else { halved.clone() }, "{i:?}");
     }
     assert_eq!(stream(&doc, mask).dict.get(b"Decode"), Some(&decode), "the decode array stays");
+    // Grey now, with grey's decode pair, which makes 1 black: its ties are black too.
+    let s = stream(&doc, rgb_inverted);
+    let inverting = Object::Array(vec![1.into(), 0.into()]);
+    assert_eq!(
+        (size(&doc, rgb_inverted), s.dict.get(b"ColorSpace"), s.dict.get(b"Decode")),
+        ((600, 240), Some(&Object::name("DeviceGray")), Some(&inverting))
+    );
+    assert_eq!(doc.decoded_image(&s).unwrap(), halved.iter().map(|b| !b).collect::<Vec<u8>>(), "the same picture, ties black");
     for i in [at_400, soft, hex_at_400] {
         assert_eq!((size(&doc, i), stream(&doc, i).dict.name(b"Filter")), ((1200, 480), Some(&b"CCITTFaxDecode"[..])), "{i:?}");
     }
