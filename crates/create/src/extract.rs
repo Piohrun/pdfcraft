@@ -4,6 +4,7 @@
 //! key as alpha. Images PdfCraft can't decode yet (JPEG 2000, JBIG2, separations) are
 //! reported, never silently left out.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
@@ -100,34 +101,48 @@ fn filters(s: &Stream) -> Vec<Vec<u8>> {
     }
 }
 
-/// The samples of image `s`, decoded: through its filters, or, for a CCITT fax image (its only
-/// filter), through a CCITT decoder, as rows of one-bit samples each starting on a byte, with black
-/// as 0 unless `/BlackIs1` says 1, as `CCITTFaxDecode` gives them (ISO 32000-2 §7.4.6).
+/// The samples of image `s`, decoded: through its filters, or, for a CCITT fax image (its last
+/// filter), through the filters before it and then a CCITT decoder, as rows of one-bit samples
+/// each starting on a byte, with black as 0 unless `/BlackIs1` says 1, as `CCITTFaxDecode` gives
+/// them (ISO 32000-2 §7.4.6).
 fn decoded(doc: &Document, s: &Stream) -> Result<Vec<u8>, String> {
-    match filters(s).as_slice() {
-        [f] if f == b"CCITTFaxDecode" || f == b"CCF" => ccitt(doc, s),
+    let names = filters(s);
+    match names.split_last() {
+        Some((f, outer)) if f == b"CCITTFaxDecode" || f == b"CCF" => {
+            // Such as ASCII85Decode, undone first (7.4.1).
+            let chain = s.filters();
+            let data = match chain.split_last() {
+                Some((_, before)) if !before.is_empty() => {
+                    Cow::Owned(pdfcraft_filters::decode_tolerant(before, &s.raw, pdfcraft_cos::MAX_DECODED).map_err(|e| e.to_string())?.0)
+                }
+                _ => Cow::Borrowed(&s.raw[..]),
+            };
+            ccitt(doc, s, &data, decode_parms(doc, s, outer.len()))
+        }
         _ => s.decoded().map_err(|e| e.to_string()),
     }
 }
 
-/// The `/DecodeParms` of a stream with one filter: a dictionary, or the one in an array (7.4.2).
-fn decode_parms(doc: &Document, s: &Stream) -> Dict {
+/// The `/DecodeParms` of filter `index` of a stream: the dictionary of a stream with one filter,
+/// or that entry of an array (7.4.2).
+fn decode_parms(doc: &Document, s: &Stream, index: usize) -> Dict {
     let Some(p) = s.dict.get(b"DecodeParms").map(|p| doc.resolve(p)) else { return Dict::default() };
     let p = match &*p {
-        Object::Array(a) => match a.first() {
-            Some(first) => doc.resolve(first),
+        Object::Array(a) => match a.get(index) {
+            Some(entry) => doc.resolve(entry),
             None => return Dict::default(),
         },
-        _ => p,
+        _ if index == 0 => p,
+        _ => return Dict::default(),
     };
     p.as_dict().cloned().unwrap_or_default()
 }
 
-/// [`decoded`] for a CCITT fax image, with its `/DecodeParms` (Table 11 defaults). `/Columns` has to
-/// be the image's width; pixels past it and rows past the image's height are dropped, so the output
-/// is bounded by the size the caller already checked. A stream that ends early gives fewer rows,
-/// which the caller refuses.
-fn ccitt(doc: &Document, s: &Stream) -> Result<Vec<u8>, String> {
+/// [`decoded`] for a CCITT fax image: `data`, coded with parameters `p` (Table 11 defaults).
+/// `/Columns` has to be the image's width; pixels past it and rows past the image's height are
+/// dropped, so the output is bounded by the size the caller already checked. A stream that ends
+/// early gives fewer rows, which the caller refuses.
+fn ccitt(doc: &Document, s: &Stream, data: &[u8], p: Dict) -> Result<Vec<u8>, String> {
     struct Rows {
         out: Vec<u8>,
         row: Vec<u8>,
@@ -164,7 +179,6 @@ fn ccitt(doc: &Document, s: &Stream) -> Result<Vec<u8>, String> {
             self.x = 0;
         }
     }
-    let p = decode_parms(doc, s);
     let flag = |key: &[u8], default: bool| match p.get(key).map(|v| doc.resolve(v)).as_deref() {
         Some(Object::Bool(b)) => *b,
         _ => default,
@@ -197,7 +211,7 @@ fn ccitt(doc: &Document, s: &Stream) -> Result<Vec<u8>, String> {
     let mut out =
         Rows { out: Vec::new(), row: vec![0; stride], x: 0, columns: columns as usize, rows: rows as usize, black_is_1: flag(b"BlackIs1", false) };
     // Rows decoded before damaged data are kept; too few rows are refused by the caller.
-    let _ = hayro_ccitt::decode(&s.raw, &mut out, &mut hayro_ccitt::DecoderContext::new(settings));
+    let _ = hayro_ccitt::decode(data, &mut out, &mut hayro_ccitt::DecoderContext::new(settings));
     Ok(out.out)
 }
 
