@@ -490,7 +490,9 @@ fn bilevel_grey(doc: &Document, s: &Stream, compression: MonoCompression) -> Opt
         return None;
     }
     let (w, h) = (usize::try_from(w).ok()?, usize::try_from(h).ok()?);
-    let samples = s.decoded().ok()?;
+    // Through its parameters given by reference too: without a PNG predictor's tag bytes taken
+    // off, rows of 0 and 255 would still pass below, each shifted by a byte.
+    let samples = doc.with_direct_parms(s).decoded().ok()?;
     let samples = samples.get(..w.checked_mul(h)?)?;
     let stride = w.div_ceil(8);
     let mut packed = vec![0u8; stride.checked_mul(h)?];
