@@ -22,3 +22,4 @@ image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [dev-dependencies]
 pdfcraft-render = { workspace = true }
+proptest.workspace = true

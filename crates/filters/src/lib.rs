@@ -24,7 +24,7 @@ mod runlength;
 
 use std::borrow::Cow;
 
-pub use ccitt::{MAX_G4_COLUMNS, encode_g4};
+pub use ccitt::{CcittParams, MAX_CCITT_COLUMNS, MAX_G4_COLUMNS, decode_ccitt, encode_g4};
 
 /// A PDF stream filter, identified by its `/Filter` name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

@@ -31,5 +31,6 @@ Indexed Decode values select palette entries after rounding and clipping. Color-
 Missing, null or malformed Decode arrays keep the default mapping.
 The existing 16-bit path still uses each sample's high byte. JPEG and mask Decode handling remain limited.
 ICC transforms and calibrated color conversion remain outside this export path.
-CCITT fax images (Group 3 and 4) are decoded for export through `hayro-ccitt` with their `/DecodeParms`
-(`/Columns` has to be the image's width), behind other filters such as `ASCII85Decode` too; JPEG 2000 and JBIG2 images are still reported, not exported.
+CCITT fax images (Group 3 and 4) are decoded for export through `pdfcraft_cos::Document::decoded_image` with their
+`/DecodeParms` (`/Columns` has to be the image's width; up to `/Height` rows, whatever `/Rows` says), behind other filters such as
+`ASCII85Decode` too; JPEG 2000 and JBIG2 images are still reported, not exported.

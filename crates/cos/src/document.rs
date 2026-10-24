@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, Weak};
 
 use crate::CosError;
-use crate::object::{Dict, ObjRef, Object, Stream};
+use crate::object::{Dict, MAX_DECODED, ObjRef, Object, Stream};
 use crate::parser::{EndstreamIndex, Lexer, is_whitespace, parse_indirect, parse_indirect_shared};
 
 thread_local! {
@@ -1063,6 +1063,60 @@ impl Document {
     /// Resolve and return a dictionary (a stream's dictionary counts).
     pub fn dict(&self, o: &Object) -> Option<Dict> {
         self.resolve(o).as_dict().cloned()
+    }
+
+    /// The samples of image `s`, decoded: through its filters ([`Stream::decoded`]), or, for a
+    /// CCITT fax image (its last filter), through the filters before it and then
+    /// [`pdfcraft_filters::decode_ccitt`] with its `/DecodeParms` (resolved; the dictionary of a
+    /// lone filter, or its entry in an array), as `CCITTFaxDecode` gives them (ISO 32000-2 §7.4.6).
+    /// Parameters given by reference count, for every filter ([`Document::with_direct_parms`]).
+    /// A fax image's `/Columns` has to be its `/Width`. Up to its `/Height` rows are decoded,
+    /// whatever `/Rows` says, within [`MAX_DECODED`] bytes; damaged data gives fewer, so a caller
+    /// checks it has the rows it needs.
+    pub fn decoded_image(&self, s: &Stream) -> Result<Vec<u8>, CosError> {
+        let s = &*self.with_direct_parms(s);
+        let chain = s.readable_filters().map_err(|e| CosError::Filter(e.to_string()))?;
+        let Some(((pdfcraft_filters::Filter::CcittFax, _), before)) = chain.split_last() else { return s.decoded() };
+        // Its place in /Filter, /Crypt included, pairs it with its /DecodeParms entry (§7.4.1).
+        let index = match s.dict.get(b"Filter") {
+            Some(Object::Array(a)) => a.len().saturating_sub(1),
+            _ => 0,
+        };
+        let parms = match s.dict.get(b"DecodeParms").map(|p| self.resolve(p)).as_deref() {
+            Some(Object::Array(a)) => a.get(index).and_then(|p| self.dict(p)),
+            Some(p) if index == 0 => p.as_dict().cloned(),
+            _ => None,
+        }
+        .unwrap_or_default();
+        let int = |key: &[u8], default: i64| parms.get(key).and_then(|v| self.resolve(v).as_int()).unwrap_or(default);
+        let flag = |key: &[u8], default: bool| match parms.get(key).map(|v| self.resolve(v)).as_deref() {
+            Some(Object::Bool(b)) => *b,
+            _ => default,
+        };
+        let d = pdfcraft_filters::CcittParams::default();
+        let p = pdfcraft_filters::CcittParams {
+            k: int(b"K", d.k),
+            columns: int(b"Columns", d.columns),
+            // As many rows as the image has: a /Rows below /Height would cut the picture short,
+            // and rows past /Height aren't drawn.
+            rows: 0,
+            end_of_line: flag(b"EndOfLine", d.end_of_line),
+            encoded_byte_align: flag(b"EncodedByteAlign", d.encoded_byte_align),
+            end_of_block: flag(b"EndOfBlock", d.end_of_block),
+            black_is_1: flag(b"BlackIs1", d.black_is_1),
+        };
+        if s.dict.int(b"Width") != Some(p.columns) {
+            return Err(CosError::Filter("a fax image's /Columns aren't its /Width".into()));
+        }
+        let height = s.dict.int(b"Height").and_then(|h| u32::try_from(h).ok()).unwrap_or(0);
+        let stride = usize::try_from(p.columns).unwrap_or(usize::MAX).div_ceil(8).max(1);
+        let rows = u32::try_from(MAX_DECODED / stride).unwrap_or(u32::MAX).min(height);
+        // The filters before it, such as ASCII85Decode, are undone first.
+        let data = match before {
+            [] => Cow::Borrowed(&s.raw[..]),
+            _ => Cow::Owned(pdfcraft_filters::decode_tolerant(before, &s.raw, MAX_DECODED).map_err(|e| CosError::Filter(e.to_string()))?.0),
+        };
+        pdfcraft_filters::decode_ccitt(&data, &p, rows).map_err(|e| CosError::Filter(e.to_string()))
     }
 
     pub fn try_get(&self, num: u32) -> Result<Arc<Object>, CosError> {
@@ -2362,6 +2416,83 @@ mod tests {
         assert_eq!(made.dict.get(b"DecodeParms").and_then(Object::as_array).map(Vec::len), Some(1));
         let long = stream(pdfcraft_filters::MAX_CHAIN + 1, Object::Array(vec![Object::Ref(r); 9]));
         assert!(matches!(doc.with_direct_parms(&long), Cow::Borrowed(_)));
+    }
+
+    /// A CCITT fax image reads through its /DecodeParms, given directly, in an array or by
+    /// reference (its numbers too), with /BlackIs1, and behind other filters; one whose /Columns
+    /// aren't its /Width is refused, /Height rows are decoded whatever /Rows says, and other images
+    /// decode through their filters.
+    #[test]
+    fn fax_images_decode_with_their_parameters() {
+        // 10 × 3: the first five samples of each row white, the rest black.
+        let bits = [0b1111_1000, 0, 0b1111_1000, 0, 0b1111_1000, 0];
+        let coded = pdfcraft_filters::encode_g4(&bits, 10, 3).unwrap();
+        let mut doc = Document::new_empty();
+        let mut parms = Dict::new();
+        parms.set(b"K".to_vec(), Object::Int(-1));
+        parms.set(b"Columns".to_vec(), Object::Int(10));
+        let indirect = doc.add(Object::Dict(parms.clone()));
+        let image = |doc: &Document, parms: Option<Object>, width: i64, height: i64| {
+            let mut d = Dict::new();
+            d.set(b"Width".to_vec(), Object::Int(width));
+            d.set(b"Height".to_vec(), Object::Int(height));
+            d.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+            if let Some(p) = parms {
+                d.set(b"DecodeParms".to_vec(), p);
+            }
+            doc.decoded_image(&Stream::from_raw(d, coded.clone()))
+        };
+        for p in [
+            Object::Dict(parms.clone()),
+            Object::Array(vec![Object::Dict(parms.clone())]),
+            Object::Ref(indirect),
+            Object::Array(vec![Object::Ref(indirect)]),
+        ] {
+            assert_eq!(image(&doc, Some(p.clone()), 10, 3).unwrap(), bits, "{p:?}");
+        }
+        let mut inverted = parms.clone();
+        inverted.set(b"BlackIs1".to_vec(), Object::Bool(true));
+        assert_eq!(
+            image(&doc, Some(Object::Dict(inverted)), 10, 3).unwrap(),
+            [0b0000_0111, 0b1100_0000, 0b0000_0111, 0b1100_0000, 0b0000_0111, 0b1100_0000]
+        );
+        assert_eq!(image(&doc, Some(Object::Dict(parms.clone())), 10, 2).unwrap(), bits[..4], "at most /Height rows");
+        let mut by_reference = Dict::new();
+        by_reference.set(b"K".to_vec(), Object::Ref(doc.add(Object::Int(-1))));
+        by_reference.set(b"Columns".to_vec(), Object::Ref(doc.add(Object::Int(10))));
+        assert_eq!(image(&doc, Some(Object::Dict(by_reference)), 10, 3).unwrap(), bits, "/K and /Columns by reference");
+        let mut understated = parms.clone();
+        understated.set(b"Rows".to_vec(), Object::Int(1));
+        assert_eq!(image(&doc, Some(Object::Dict(understated)), 10, 3).unwrap(), bits, "/Height rows, whatever /Rows says");
+        assert!(matches!(image(&doc, Some(Object::Dict(parms.clone())), 12, 3), Err(CosError::Filter(_))), "/Columns other than /Width");
+        assert!(matches!(image(&doc, None, 10, 3), Err(CosError::Filter(_))), "the default 1728 /Columns");
+        let mut plain = Dict::new();
+        plain.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        assert_eq!(doc.decoded_image(&Stream::from_raw(plain, pdfcraft_filters::encode_flate(&bits))).unwrap(), bits);
+
+        // Behind other filters, its parameters at its own place in the array (/Crypt counts).
+        let behind = |filters: &[Object], parms: &[Object], data: Vec<u8>| {
+            let mut d = Dict::new();
+            d.set(b"Width".to_vec(), Object::Int(10));
+            d.set(b"Height".to_vec(), Object::Int(3));
+            d.set(b"Filter".to_vec(), Object::Array(filters.to_vec()));
+            d.set(b"DecodeParms".to_vec(), Object::Array(parms.to_vec()));
+            doc.decoded_image(&Stream::from_raw(d, data))
+        };
+        let (fax, null, own) = (Object::name("CCITTFaxDecode"), Object::Null, Object::Dict(parms.clone()));
+        let hex = coded.iter().map(|b| format!("{b:02x}")).chain([">".to_string()]).collect::<String>().into_bytes();
+        let flated = pdfcraft_filters::encode_flate(&coded);
+        let ahx = [Object::name("AHx"), fax.clone()];
+        assert_eq!(behind(&ahx, &[null.clone(), Object::Ref(indirect)], hex.clone()).unwrap(), bits, "behind ASCIIHexDecode");
+        assert_eq!(
+            behind(&[Object::name("FlateDecode"), Object::name("CCF")], &[null.clone(), own.clone()], flated.clone()).unwrap(),
+            bits,
+            "behind Flate"
+        );
+        assert_eq!(behind(&[Object::name("Crypt"), fax.clone()], &[null.clone(), own.clone()], coded.clone()).unwrap(), bits, "after /Crypt");
+        assert!(behind(&ahx, &[own.clone(), null.clone()], hex).is_err(), "the first entry is the other filter's");
+        assert!(behind(&[fax.clone(), Object::name("FlateDecode")], &[own.clone(), null.clone()], flated).is_err(), "CCITT, then Flate");
+        assert!(behind(&[Object::Int(5), fax], &[null, own], coded.clone()).is_err(), "a /Filter entry that isn't a name");
     }
 
     #[test]

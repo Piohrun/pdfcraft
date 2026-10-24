@@ -1,5 +1,6 @@
-//! CCITT Group 4 (ITU-T T.6) encoding, for `CCITTFaxDecode` with `/K -1` (ISO 32000-2 §7.4.6).
-//! The coding is the `fax` crate's; this module checks what it is given.
+//! CCITT fax for `CCITTFaxDecode` (ISO 32000-2 §7.4.6): Group 4 (ITU-T T.6) encoding, with `/K -1`,
+//! and decoding of Group 3 (T.4) and Group 4. The coding is the `fax` crate's and the decoding the
+//! `hayro-ccitt` crate's; this module checks what they are given and bounds what they give.
 
 use fax::encoder::Encoder;
 use fax::{Color, VecWriter};
@@ -46,6 +47,115 @@ pub fn encode_g4(data: &[u8], columns: u32, rows: u32) -> Result<Vec<u8>, Filter
     match encoder.finish() {
         Ok(writer) => Ok(writer.finish()),
         Err(never) => match never {},
+    }
+}
+
+/// The widest row [`decode_ccitt`] decodes: its row buffer stays within 128 KiB.
+pub const MAX_CCITT_COLUMNS: u32 = 1 << 20;
+
+/// A `CCITTFaxDecode` stream's `/DecodeParms` (ISO 32000-2 Table 11). [`Default`] gives the
+/// table's defaults.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CcittParams {
+    /// `/K`: negative for Group 4, 0 for Group 3 one-dimensional, positive for Group 3 mixed.
+    pub k: i64,
+    pub columns: i64,
+    /// `/Rows`: 0 when not given.
+    pub rows: i64,
+    pub end_of_line: bool,
+    pub encoded_byte_align: bool,
+    pub end_of_block: bool,
+    pub black_is_1: bool,
+}
+
+impl Default for CcittParams {
+    fn default() -> Self {
+        CcittParams { k: 0, columns: 1728, rows: 0, end_of_line: false, encoded_byte_align: false, end_of_block: true, black_is_1: false }
+    }
+}
+
+/// CCITT fax `data` decoded as `CCITTFaxDecode` gives it: rows of `columns` 1-bit samples, most
+/// significant bit first, each starting on a new byte, with black as 0 (as 1 with `black_is_1`).
+///
+/// At most `max_rows` rows are decoded (fewer when `rows` says so), so the output is bounded by
+/// the caller. Damaged data gives the rows decoded before the damage, as viewers show them: a
+/// caller that needs a number of rows checks it got them.
+///
+/// Errors: `columns` that aren't from 1 to [`MAX_CCITT_COLUMNS`] ([`FilterError::Unsupported`]).
+pub fn decode_ccitt(data: &[u8], p: &CcittParams, max_rows: u32) -> Result<Vec<u8>, FilterError> {
+    let columns = u32::try_from(p.columns)
+        .ok()
+        .filter(|c| (1..=MAX_CCITT_COLUMNS).contains(c))
+        .ok_or_else(|| FilterError::Unsupported(format!("CCITT fax rows {} samples wide", p.columns)))?;
+    let rows = u32::try_from(p.rows).ok().filter(|r| *r > 0).map_or(max_rows, |r| r.min(max_rows));
+    if rows == 0 {
+        return Ok(Vec::new());
+    }
+    let settings = hayro_ccitt::DecodeSettings {
+        columns,
+        rows,
+        end_of_block: p.end_of_block,
+        end_of_line: p.end_of_line,
+        rows_are_byte_aligned: p.encoded_byte_align,
+        encoding: match p.k {
+            ..0 => hayro_ccitt::EncodingMode::Group4,
+            0 => hayro_ccitt::EncodingMode::Group3_1D,
+            k => hayro_ccitt::EncodingMode::Group3_2D { k: u32::try_from(k).unwrap_or(u32::MAX) },
+        },
+        invert_black: false,
+    };
+    // u32 to usize: wasm32 and up have at least 32-bit usize.
+    let mut out = Rows::new(columns as usize, rows as usize, p.black_is_1);
+    // The rows decoded before damaged data are kept.
+    let _ = hayro_ccitt::decode(data, &mut out, &mut hayro_ccitt::DecoderContext::new(settings));
+    Ok(out.out)
+}
+
+/// Rows of 1-bit samples filled from a decoder's pixels: `columns` a row, each row on a new byte, at
+/// most `rows` rows. Pixels past a row's end and rows past the last are dropped.
+struct Rows {
+    out: Vec<u8>,
+    row: Vec<u8>,
+    x: usize,
+    columns: usize,
+    rows: usize,
+    done: usize,
+    black_is_1: bool,
+}
+
+impl Rows {
+    fn new(columns: usize, rows: usize, black_is_1: bool) -> Self {
+        Rows { out: Vec::new(), row: vec![0; columns.div_ceil(8)], x: 0, columns, rows, done: 0, black_is_1 }
+    }
+
+    /// `count` pixels, white or black.
+    fn push(&mut self, white: bool, count: usize) {
+        let end = self.x.saturating_add(count);
+        if white != self.black_is_1 {
+            for x in self.x..end.min(self.columns) {
+                if let Some(b) = self.row.get_mut(x / 8) {
+                    *b |= 0x80 >> (x % 8);
+                }
+            }
+        }
+        self.x = end;
+    }
+}
+
+impl hayro_ccitt::Decoder for Rows {
+    fn push_pixel(&mut self, white: bool) {
+        self.push(white, 1);
+    }
+    fn push_pixel_chunk(&mut self, white: bool, chunks: u32) {
+        self.push(white, (chunks as usize).saturating_mul(8));
+    }
+    fn next_line(&mut self) {
+        if self.done < self.rows {
+            self.out.extend_from_slice(&self.row);
+            self.done += 1;
+        }
+        self.row.fill(0);
+        self.x = 0;
     }
 }
 
@@ -159,8 +269,40 @@ mod tests {
         data
     }
 
+    fn g4(columns: u32) -> CcittParams {
+        CcittParams { k: -1, columns: i64::from(columns), ..CcittParams::default() }
+    }
+
+    #[test]
+    fn decoding_gives_the_rows_back() {
+        // 3 columns, padded with anything: the decoded padding is 0.
+        let data = [0b1010_1111, 0b0101_0000, 0b1110_1010];
+        let coded = encode_g4(&data, 3, 3).unwrap();
+        assert_eq!(decode_ccitt(&coded, &g4(3), 3).unwrap(), [0b1010_0000, 0b0100_0000, 0b1110_0000]);
+        // /BlackIs1 gives black as 1.
+        let p = CcittParams { black_is_1: true, ..g4(3) };
+        assert_eq!(decode_ccitt(&coded, &p, 3).unwrap(), [0b0100_0000, 0b1010_0000, 0b0000_0000]);
+        // At most /Rows rows, and at most max_rows.
+        assert_eq!(decode_ccitt(&coded, &CcittParams { rows: 2, ..g4(3) }, 3).unwrap().len(), 2);
+        assert_eq!(decode_ccitt(&coded, &g4(3), 1).unwrap().len(), 1);
+        assert_eq!(decode_ccitt(&coded, &CcittParams { rows: 3, ..g4(3) }, 1).unwrap().len(), 1, "max_rows bounds /Rows");
+        assert_eq!(decode_ccitt(&coded, &g4(3), 0).unwrap(), [0u8; 0]);
+        // Damaged data gives the rows before the damage; none here.
+        assert!(decode_ccitt(&coded[..1], &g4(3), 3).unwrap().len() < 3);
+    }
+
+    #[test]
+    fn what_it_cannot_decode_is_an_error() {
+        for columns in [0, -1, i64::from(MAX_CCITT_COLUMNS) + 1, i64::MAX] {
+            let p = CcittParams { columns, ..CcittParams::default() };
+            assert!(matches!(decode_ccitt(&[0; 8], &p, 4), Err(FilterError::Unsupported(_))), "{columns}");
+        }
+        assert_eq!(CcittParams::default().columns, 1728, "Table 11");
+    }
+
     proptest::proptest! {
-        /// Any bitmap, of noise or of runs, decodes to its own bits through an independent decoder.
+        /// Any bitmap, of noise or of runs, decodes to its own bits, through an independent decoder
+        /// and through `decode_ccitt`.
         #[test]
         fn bitmaps_round_trip(
             columns in 1u32..400,
@@ -169,14 +311,20 @@ mod tests {
             noise in proptest::bool::ANY,
         ) {
             let data = bitmap(columns, rows, &runs, noise);
-            let g4 = encode_g4(&data, columns, rows).unwrap();
-            proptest::prop_assert_eq!(decode(&g4, columns, rows), unpack(&data, columns, rows));
+            let coded = encode_g4(&data, columns, rows).unwrap();
+            proptest::prop_assert_eq!(decode(&coded, columns, rows), unpack(&data, columns, rows));
+            let decoded = decode_ccitt(&coded, &g4(columns), rows).unwrap();
+            proptest::prop_assert_eq!(unpack(&decoded, columns, rows), unpack(&data, columns, rows));
         }
 
         /// Whatever it is given, it returns.
         #[test]
-        fn any_input_returns(data in proptest::collection::vec(0u8..=255, 0..600), columns in 0u32..40_000, rows in 0u32..80) {
+        fn any_input_returns(data in proptest::collection::vec(0u8..=255, 0..600), columns in 0u32..40_000, rows in 0u32..80, k in -2i64..3) {
             let _ = encode_g4(&data, columns, rows);
+            let p = CcittParams { k, columns: i64::from(columns), ..CcittParams::default() };
+            if let Ok(out) = decode_ccitt(&data, &p, rows) {
+                proptest::prop_assert!(out.len() <= (columns as usize).div_ceil(8) * rows as usize);
+            }
         }
     }
 }

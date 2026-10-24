@@ -1216,6 +1216,7 @@ impl Automation {
 
     fn doc_optimize(&mut self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::optimize::{Compression, ImageSettings, MonoCompression, Preset};
+        const MONO_KEYS: [&str; 4] = ["downsample", "ppi", "above_ppi", "compression"];
         let id = self.doc(a)?.id;
         let before = self.doc(a)?.bytes.len();
         let path = self.resolve(a.str("path")?, true)?;
@@ -1251,13 +1252,29 @@ impl Automation {
         settings.gray = images("gray", settings.gray)?;
         if let Some(mono) = a.get("mono") {
             let unknown = |c: &Value| ToolError::InvalidArgs(format!("unknown mono compression {c} (ccitt_g4, retain)"));
-            let mono = mono.as_object().ok_or_else(|| ToolError::InvalidArgs("mono must be an object: { compression: ccitt_g4|retain }".into()))?;
+            let mono = mono.as_object().ok_or_else(|| {
+                ToolError::InvalidArgs("mono must be an object: { downsample, ppi, above_ppi, compression: ccitt_g4|retain }".into())
+            })?;
             // A misspelled key would otherwise leave the preset's setting in place unnoticed.
-            if let Some(key) = mono.keys().find(|k| *k != "compression") {
-                return Err(ToolError::InvalidArgs(format!("unknown mono key {key:?} (compression)")));
+            if let Some(key) = mono.keys().find(|k| !MONO_KEYS.contains(&k.as_str())) {
+                return Err(ToolError::InvalidArgs(format!("unknown mono key {key:?} ({})", MONO_KEYS.join(", "))));
             }
+            let m = &mut settings.mono;
+            if let Some(d) = mono.get("downsample") {
+                m.downsample = d.as_bool().ok_or_else(|| ToolError::InvalidArgs(format!("mono downsample must be true or false, not {d}")))?;
+            }
+            for (key, ppi) in [("ppi", &mut m.target_ppi), ("above_ppi", &mut m.above_ppi)] {
+                if let Some(p) = mono.get(key) {
+                    *ppi = p
+                        .as_f64()
+                        .filter(|p| p.is_finite())
+                        .ok_or_else(|| ToolError::InvalidArgs(format!("mono {key} must be a number, not {p}")))?
+                        .clamp(9.0, 2400.0);
+                }
+            }
+            m.above_ppi = m.above_ppi.max(m.target_ppi);
             if let Some(c) = mono.get("compression") {
-                settings.mono = match c.as_str() {
+                m.compression = match c.as_str() {
                     Some("ccitt_g4" | "ccitt" | "g4") => MonoCompression::CcittG4,
                     Some("retain") => MonoCompression::Retain,
                     _ => return Err(unknown(c)),

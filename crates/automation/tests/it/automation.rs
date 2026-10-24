@@ -5728,6 +5728,11 @@ fn optimizing_through_tools() {
 /// A one-page PDF drawing a 1-bit scan of text (glyph strokes with ragged edges, as a scanner
 /// leaves them) of 1000 × 400 samples, stored with Flate.
 fn scanned_page() -> Vec<u8> {
+    scan_drawn(b"q 500 0 0 200 50 500 cm /Scan Do Q")
+}
+
+/// [`scanned_page`]'s scan, drawn by `content` (which names it `/Scan`).
+fn scan_drawn(content: &[u8]) -> Vec<u8> {
     use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_full};
     let (w, h) = (1000usize, 400usize);
     let stride = w.div_ceil(8);
@@ -5768,7 +5773,7 @@ fn scanned_page() -> Vec<u8> {
     x.set(b"Scan".to_vec(), Object::Ref(image));
     let mut res = Dict::new();
     res.set(b"XObject".to_vec(), Object::Dict(x));
-    let content = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"q 500 0 0 200 50 500 cm /Scan Do Q".to_vec())));
+    let content = doc.add(Object::Stream(Stream::from_raw(Dict::new(), content.to_vec())));
     let mut p = Dict::new();
     p.set(b"Type".to_vec(), Object::name("Page"));
     p.set(b"Parent".to_vec(), Object::Ref(pages));
@@ -5860,6 +5865,39 @@ fn doc_optimize_stores_black_and_white_images_as_ccitt_group_4() {
     // An unknown compression, one that isn't a name, a misspelled key, or a mono that isn't an
     // object is refused, not read as the default.
     for mono in [json!({ "compression": "jbig2" }), json!({ "compression": false }), json!({ "compresson": "retain" }), json!("retain")] {
+        assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "mono": mono })), Err(ToolError::InvalidArgs(_))), "{mono}");
+    }
+}
+
+/// A scan drawn at 600 ppi is averaged down to 300 ppi by default. `mono: { downsample: false }`
+/// keeps its size, `ppi` and `above_ppi` choose others, and values of the wrong type are refused.
+#[test]
+fn doc_optimize_averages_black_and_white_scans_down() {
+    let dir = workdir("optimize-mono-downsample");
+    // 1000 × 400 samples on 120 × 48 pt: 600 ppi.
+    std::fs::write(dir.join("scan.pdf"), scan_drawn(b"q 120 0 0 48 50 500 cm /Scan Do Q")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "scan.pdf" }))["doc"].as_u64().unwrap();
+    let sizes = |name: &str| -> Vec<(Option<i64>, Option<i64>)> {
+        let written = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(name)).unwrap())).unwrap();
+        written
+            .object_numbers()
+            .into_iter()
+            .filter_map(|num| match &*written.get(pdfcraft_cos::ObjRef { num, generation: written.generation(num) }) {
+                pdfcraft_cos::Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => Some((s.dict.int(b"Width"), s.dict.int(b"Height"))),
+                _ => None,
+            })
+            .collect()
+    };
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "small.pdf" }));
+    assert_eq!(r["images_resampled"].as_u64(), Some(1), "{r}");
+    assert_eq!(sizes("small.pdf"), [(Some(500), Some(200))]);
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "kept.pdf", "mono": { "downsample": false } }));
+    assert_eq!(r["images_resampled"].as_u64(), Some(0), "{r}");
+    assert_eq!(sizes("kept.pdf"), [(Some(1000), Some(400))]);
+    ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "200.pdf", "mono": { "ppi": 200, "above_ppi": 250 } }));
+    assert_eq!(sizes("200.pdf"), [(Some(333), Some(133))]);
+    for mono in [json!({ "downsample": "yes" }), json!({ "ppi": "300" }), json!({ "above": 450 })] {
         assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "mono": mono })), Err(ToolError::InvalidArgs(_))), "{mono}");
     }
 }

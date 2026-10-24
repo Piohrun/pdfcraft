@@ -191,6 +191,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-24 (M11, monochrome downsampling):** The PDF Optimizer and Reduce File Size average black-and-white images above 450 ppi down to 300 ppi (Monochrome Images ▸ Downsample to), Group 4 scans included, so a 600 ppi text page goes from 79 KB to 40 KB. CCITT decoding moved into `pdfcraft-filters` (`decode_ccitt`), shared by Export ▸ Images and the optimizer through `Document::decoded_image`.
 - **2026-10-24 (M11, black-and-white pictures):** A scan saved as a 1-bit PNG became an eight-bit grey image when made into a PDF, larger than the PNG; Create PDF now stores pictures of only black and white at one bit (Group 4 when smaller), the optimizer packs eight-bit black-and-white grey images to one bit, and Export ▸ Images reads CCITT fax images.
 - **2026-10-23 (M11, monochrome compression):** The PDF Optimizer and Reduce File Size store black-and-white images (scans, image masks) losslessly as CCITT Group 4 when that is smaller, with a Monochrome Images setting in the Optimizer and `doc_optimize` `mono`. JBIG2 and monochrome downsampling are next.
 - **2026-10-22 (M4, #3916 partial):** Document edits and Undo/Redo cancel an Organize page drag. Pointer-release regressions check exact page order and save/reopen.

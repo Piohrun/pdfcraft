@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use pdfcraft_content::{Matrix, Pieces};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
-use crate::{Compression, ImageSettings, MonoCompression, OptimizeError, Report, Settings, Stage};
+use crate::{Compression, ImageSettings, MonoCompression, MonoSettings, OptimizeError, Report, Settings, Stage};
 
 /// Images with more pixels than this are left alone (memory).
 const MAX_PIXELS: u64 = 80_000_000;
@@ -421,100 +421,167 @@ fn one_component(doc: &Document, cs: &Object) -> bool {
     }
 }
 
-/// A black-and-white image (one bit per pixel, or an image mask) stored again as CCITT Group 4,
-/// if `compression` asks for that and the result is smaller as stored. Only images whose samples
-/// PdfCraft decodes (no filter, or general-purpose filters: image codecs don't decode here)
-/// qualify. The samples decode to the same bits, so the colour space, decode array and masks stay
-/// as they are.
-fn mono(doc: &Document, s: &Stream, compression: MonoCompression) -> Option<Stream> {
-    if compression != MonoCompression::CcittG4 {
-        return None;
-    }
+/// The samples of a black-and-white image, as rows of 1-bit samples each starting on a new byte,
+/// with its width and height, and whether they were packed from eight bits. Two kinds count:
+/// - one bit per pixel in one colour component, or an image mask, stored with no filter, with
+///   general-purpose ones, or with CCITT fax last ([`Document::decoded_image`]);
+/// - with `eight_bit`, eight-bit grey whose every sample is 0 or 255. A decode array maps 0 and 255
+///   at eight bits as it maps 0 and 1 at one bit, so it stays. Left out: indexed images (their
+///   samples are palette indices) and a colour-key `/Mask` (its ranges are in eight-bit values).
+fn one_bit(doc: &Document, s: &Stream, eight_bit: bool) -> Option<(Vec<u8>, u32, u32, bool)> {
     let d = &s.dict;
-    let bits = d.int(b"BitsPerComponent");
-    let qualifies = if matches!(d.get(b"ImageMask"), Some(Object::Bool(true))) {
-        bits.is_none_or(|b| b == 1)
-    } else {
-        bits == Some(1) && d.get(b"ColorSpace").is_some_and(|cs| one_component(doc, cs))
-    };
-    if !qualifies {
-        return None;
-    }
-    let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
-    if w == 0 || h == 0 || w > pdfcraft_filters::MAX_G4_COLUMNS || u64::from(w) * u64::from(h) > MAX_PIXELS {
-        return None;
-    }
-    // Through its parameters given by reference too, as `pixels` reads.
-    let g4 = pdfcraft_filters::encode_g4(&doc.with_direct_parms(s).decoded().ok()?, w, h).ok()?;
-    let mut new = d.clone();
-    for k in [&b"Filter"[..], b"DecodeParms", b"Length", b"DL"] {
-        new.remove(k);
-    }
-    let mut parms = Dict::new();
-    parms.set(b"K".to_vec(), Object::Int(-1));
-    parms.set(b"Columns".to_vec(), Object::Int(i64::from(w)));
-    parms.set(b"Rows".to_vec(), Object::Int(i64::from(h)));
-    new.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
-    new.set(b"DecodeParms".to_vec(), Object::Dict(parms));
-    let new = Stream::from_raw(new, g4);
-    // Smaller as stored, counting the larger dictionary: a tiny image can lose by it.
-    (crate::stored_len(&new)? < crate::stored_len(s)?).then_some(new)
-}
-
-/// An eight-bit grey image whose every sample is 0 or 255, stored at one bit per pixel and then as
-/// `compression` asks (see [`mono`]), if that is smaller as stored. Lossless: a decode array maps
-/// 0 and 255 at eight bits as it maps 0 and 1 at one bit, so it stays. Left alone: indexed images
-/// (their samples are palette indices), a colour-key `/Mask` (its ranges are in eight-bit values),
-/// and everything when `compression` is Retain: such an image is then a grey image like any other,
-/// which the grey settings handle as they did before.
-fn bilevel_grey(doc: &Document, s: &Stream, compression: MonoCompression) -> Option<Stream> {
-    if compression == MonoCompression::Retain {
-        return None;
-    }
-    let d = &s.dict;
-    let indexed = |cs: &Object| match &*doc.resolve(cs) {
-        Object::Array(a) => matches!(a.first().and_then(Object::as_name), Some(b"Indexed" | b"I")),
-        _ => false,
-    };
-    let colour_key = d.get(b"Mask").is_some_and(|m| doc.resolve(m).as_array().is_some());
-    if d.int(b"BitsPerComponent") != Some(8)
-        || matches!(d.get(b"ImageMask"), Some(Object::Bool(true)))
-        || colour_key
-        || !d.get(b"ColorSpace").is_some_and(|cs| one_component(doc, cs) && !indexed(cs))
-    {
-        return None;
-    }
     // Through u32 first, as everywhere here, so the product can't overflow.
     let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
     if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PIXELS {
         return None;
     }
-    let (w, h) = (usize::try_from(w).ok()?, usize::try_from(h).ok()?);
+    let (wu, hu) = (usize::try_from(w).ok()?, usize::try_from(h).ok()?);
+    let stride = wu.div_ceil(8);
+    let bits = d.int(b"BitsPerComponent");
+    let mask = matches!(d.get(b"ImageMask"), Some(Object::Bool(true)));
+    if (mask && bits.is_none_or(|b| b == 1)) || (bits == Some(1) && d.get(b"ColorSpace").is_some_and(|cs| one_component(doc, cs))) {
+        let mut data = doc.decoded_image(s).ok()?;
+        let len = stride.checked_mul(hu)?;
+        if data.len() < len {
+            return None;
+        }
+        data.truncate(len);
+        return Some((data, w, h, false));
+    }
+    let indexed = |cs: &Object| match &*doc.resolve(cs) {
+        Object::Array(a) => matches!(a.first().and_then(Object::as_name), Some(b"Indexed" | b"I")),
+        _ => false,
+    };
+    let colour_key = d.get(b"Mask").is_some_and(|m| doc.resolve(m).as_array().is_some());
+    if !eight_bit || bits != Some(8) || mask || colour_key || !d.get(b"ColorSpace").is_some_and(|cs| one_component(doc, cs) && !indexed(cs)) {
+        return None;
+    }
     // Through its parameters given by reference too: without a PNG predictor's tag bytes taken
     // off, rows of 0 and 255 would still pass below, each shifted by a byte.
     let samples = doc.with_direct_parms(s).decoded().ok()?;
-    let samples = samples.get(..w.checked_mul(h)?)?;
-    let stride = w.div_ceil(8);
-    let mut packed = vec![0u8; stride.checked_mul(h)?];
+    let samples = samples.get(..wu.checked_mul(hu)?)?;
+    let mut packed = vec![0u8; stride.checked_mul(hu)?];
     for (i, v) in samples.iter().enumerate() {
         match v {
             0 => {}
             255 => {
-                if let Some(b) = packed.get_mut((i / w) * stride + (i % w) / 8) {
-                    *b |= 0x80 >> (i % w % 8);
+                if let Some(b) = packed.get_mut((i / wu) * stride + (i % wu) / 8) {
+                    *b |= 0x80 >> (i % wu % 8);
                 }
             }
             _ => return None,
         }
     }
-    let mut one_bit = d.clone();
-    for k in [&b"Filter"[..], b"DecodeParms", b"Length", b"DL"] {
-        one_bit.remove(k);
+    Some((packed, w, h, true))
+}
+
+/// `w` × `h` 1-bit rows (each starting on a new byte) averaged down to `nw` × `nh`, no larger:
+/// each new pixel takes the sample that covers more of its area, and a 0 when the two tie. A 0 is
+/// black in grey and the painted part of an image mask, so a dark line half a new pixel wide stays.
+/// `None` when the rows are short or the new size isn't smaller in both directions or empty.
+pub(crate) fn downsample_bits(data: &[u8], w: u32, h: u32, nw: u32, nh: u32) -> Option<Vec<u8>> {
+    if nw == 0 || nh == 0 || nw > w || nh > h {
+        return None;
     }
-    one_bit.set(b"BitsPerComponent".to_vec(), Object::Int(1));
-    let one_bit = Stream::flate(one_bit, &packed);
-    let best = mono(doc, &one_bit, compression).unwrap_or(one_bit);
-    (crate::stored_len(&best)? < crate::stored_len(s)?).then_some(best)
+    let (stride, nstride) = (usize::try_from(w).ok()?.div_ceil(8), usize::try_from(nw).ok()?.div_ceil(8));
+    let data = data.get(..stride.checked_mul(usize::try_from(h).ok()?)?)?;
+    let mut out = vec![0u8; nstride.checked_mul(usize::try_from(nh).ok()?)?];
+    // In units of 1/nw of a source column, source column x spans [x·nw, (x+1)·nw) and new column i
+    // spans [i·w, (i+1)·w); rows likewise with h and nh. A new pixel's area is then w·h.
+    let (w, h, nw, nh) = (u64::from(w), u64::from(h), u64::from(nw), u64::from(nh));
+    let overlap = |a0: u64, a1: u64, b0: u64, b1: u64| a1.min(b1).saturating_sub(a0.max(b0));
+    // Per source column, the area its 1 samples cover in the new row.
+    let mut ones = vec![0u64; usize::try_from(w).ok()?];
+    for j in 0..nh {
+        ones.fill(0);
+        let (y0, y1) = (j * h, (j + 1) * h);
+        for y in y0 / nh..y1.div_ceil(nh).min(h) {
+            let weight = overlap(y0, y1, y * nh, (y + 1) * nh);
+            let row = data.get(usize::try_from(y).ok()? * stride..)?;
+            for (x, sum) in ones.iter_mut().enumerate() {
+                if row.get(x / 8).is_some_and(|b| b & (0x80 >> (x % 8)) != 0) {
+                    *sum += weight;
+                }
+            }
+        }
+        let out_row = out.get_mut(usize::try_from(j).ok()? * nstride..)?;
+        for i in 0..nw {
+            let (x0, x1) = (i * w, (i + 1) * w);
+            let covered: u64 = (x0 / nw..x1.div_ceil(nw).min(w))
+                .map(|x| overlap(x0, x1, x * nw, (x + 1) * nw) * usize::try_from(x).ok().and_then(|x| ones.get(x)).copied().unwrap_or(0))
+                .sum();
+            // More than half of w·h, which can't overflow (w·h < 2^64 for u32 sizes).
+            if covered > w * h / 2 {
+                let i = usize::try_from(i).ok()?;
+                *out_row.get_mut(i / 8)? |= 0x80 >> (i % 8);
+            }
+        }
+    }
+    Some(out)
+}
+
+/// A black-and-white image (see [`one_bit`]) resampled and stored again per `settings`, if that is
+/// smaller as stored; `ppi` is its effective resolution. Also says whether it was resampled.
+///
+/// - **Resampled** ([`downsample_bits`]) when its resolution is above `above_ppi`, to `target_ppi`,
+///   unless it has a soft mask, whose own size would then have to follow.
+/// - **Stored** as CCITT Group 4 with `CcittG4`, or as 1-bit Flate when that is smaller, which only
+///   a resampled image or one packed from eight bits may be: a 1-bit image that is only stored again
+///   becomes Group 4 or stays. With `Retain`, a resampled image keeps its kind of compression
+///   (CCITT, or Flate), and nothing else changes: eight-bit grey stays a grey image like any
+///   other, which the grey settings handle.
+///
+/// The samples keep their meaning, so the colour space, decode array and `/Mask` stay as they are.
+fn mono(doc: &Document, s: &Stream, ppi: f64, settings: &MonoSettings) -> Option<(Stream, bool)> {
+    let d = &s.dict;
+    let downsample = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0 && !d.contains(b"SMask");
+    let retain = settings.compression == MonoCompression::Retain;
+    let chain = s.filters();
+    // Its kind of compression, which Retain keeps, behind any other filters.
+    let ccitt = matches!(chain.last(), Some((pdfcraft_filters::Filter::CcittFax, _)));
+    // A fax image is only worth decoding to resample it; behind ASCII85Decode, say, storing it
+    // again as Group 4 also drops that filter.
+    let fax_alone = ccitt && chain.len() == 1;
+    if (retain || fax_alone) && !downsample {
+        return None;
+    }
+    let (data, w, h, eight_bit) = one_bit(doc, s, !retain)?;
+    let k = settings.target_ppi / ppi;
+    // At most `w` × `h`, as k < 1: no overflow.
+    let (nw, nh) =
+        if downsample && k < 1.0 { (((f64::from(w) * k).round() as u32).max(1), ((f64::from(h) * k).round() as u32).max(1)) } else { (w, h) };
+    let resampled = (nw, nh) != (w, h);
+    if (retain || fax_alone) && !resampled {
+        return None;
+    }
+    let data = if resampled { downsample_bits(&data, w, h, nw, nh)? } else { data };
+    let mut dict = d.clone();
+    for key in [&b"Filter"[..], b"DecodeParms", b"Length", b"DL"] {
+        dict.remove(key);
+    }
+    dict.set(b"Width".to_vec(), Object::Int(i64::from(nw)));
+    dict.set(b"Height".to_vec(), Object::Int(i64::from(nh)));
+    if eight_bit {
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    }
+    let g4 = if settings.compression == MonoCompression::CcittG4 || (retain && ccitt) {
+        pdfcraft_filters::encode_g4(&data, nw, nh).ok().map(|coded| {
+            let mut dict = dict.clone();
+            let mut parms = Dict::new();
+            parms.set(b"K".to_vec(), Object::Int(-1));
+            parms.set(b"Columns".to_vec(), Object::Int(i64::from(nw)));
+            parms.set(b"Rows".to_vec(), Object::Int(i64::from(nh)));
+            dict.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+            dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+            Stream::from_raw(dict, coded)
+        })
+    } else {
+        None
+    };
+    let flate = ((resampled || eight_bit) && !(retain && ccitt)).then(|| Stream::flate(dict, &data));
+    // Smaller as stored, counting the dictionary: a tiny image can lose by Group 4's parameters.
+    let best = [g4, flate].into_iter().flatten().filter_map(|c| Some((crate::stored_len(&c)?, c))).min_by_key(|(len, _)| *len)?;
+    (best.0 < crate::stored_len(s)?).then_some((best.1, resampled))
 }
 
 pub(crate) fn run(
@@ -543,10 +610,14 @@ pub(crate) fn run(
         let obj = doc.get(r);
         let Object::Stream(s) = &*obj else { continue };
         report.images += 1;
-        if let Some(new) = mono(doc, s, settings.mono).or_else(|| bilevel_grey(doc, s, settings.mono)) {
+        if let Some((new, resampled)) = mono(doc, s, ppi, &settings.mono) {
             report.image_bytes_before += s.raw.len();
             report.image_bytes_after += new.raw.len();
-            report.images_recompressed += 1;
+            if resampled {
+                report.images_resampled += 1;
+            } else {
+                report.images_recompressed += 1;
+            }
             doc.set(r, Object::Stream(new));
             continue;
         }
@@ -621,5 +692,78 @@ mod tests {
         let contents = Object::Array(vec![Object::Ref(stream); 300]);
         let data = super::content_bytes(&doc, &contents, &mut DecodeBudget::page());
         assert!(data.is_none_or(|d| d.len() <= MAX_PAGE_DECODED + 300));
+    }
+}
+
+#[cfg(test)]
+mod downsample_tests {
+    use super::downsample_bits;
+
+    /// [`downsample_bits`] the slow way: each new pixel's area against every source pixel's.
+    fn naive(data: &[u8], w: u32, h: u32, nw: u32, nh: u32) -> Vec<u8> {
+        let (stride, nstride) = ((w as usize).div_ceil(8), (nw as usize).div_ceil(8));
+        let (w, h, nw, nh) = (u64::from(w), u64::from(h), u64::from(nw), u64::from(nh));
+        let mut out = vec![0u8; nstride * nh as usize];
+        for j in 0..nh {
+            for i in 0..nw {
+                let mut ones = 0;
+                for y in 0..h {
+                    for x in 0..w {
+                        let across = ((i + 1) * w).min((x + 1) * nw).saturating_sub((i * w).max(x * nw));
+                        let down = ((j + 1) * h).min((y + 1) * nh).saturating_sub((j * h).max(y * nh));
+                        if data[y as usize * stride + x as usize / 8] & (0x80 >> (x % 8)) != 0 {
+                            ones += across * down;
+                        }
+                    }
+                }
+                if 2 * ones > w * h {
+                    out[j as usize * nstride + i as usize / 8] |= 0x80 >> (i % 8);
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn each_new_pixel_takes_the_sample_covering_more_of_it() {
+        // 4 × 2 to 2 × 1: three 1s of four on the left, none on the right.
+        assert_eq!(downsample_bits(&[0b1100_0000, 0b1000_0000], 4, 2, 2, 1), Some(vec![0b1000_0000]));
+        // A tie gives 0: black in grey, so a black line half a new pixel wide stays (the second
+        // of four white columns is black); a white one that thin on black doesn't.
+        assert_eq!(downsample_bits(&[0b1011_0000, 0b1011_0000], 4, 2, 2, 1), Some(vec![0b0100_0000]));
+        assert_eq!(downsample_bits(&[0b0100_0000, 0b0100_0000], 4, 2, 2, 1), Some(vec![0]));
+        // The same size gives the same bits; padding bits are 0.
+        assert_eq!(downsample_bits(&[0b1010_1111], 3, 1, 3, 1), Some(vec![0b1010_0000]));
+        // 3 to 2 across: the middle column counts half to each new one.
+        assert_eq!(downsample_bits(&[0b1100_0000], 3, 1, 2, 1), Some(vec![0b1000_0000]));
+    }
+
+    #[test]
+    fn what_it_cannot_resample_is_none() {
+        assert_eq!(downsample_bits(&[0; 2], 4, 2, 5, 1), None, "wider");
+        assert_eq!(downsample_bits(&[0; 2], 4, 2, 2, 3), None, "taller");
+        assert_eq!(downsample_bits(&[0; 2], 4, 2, 0, 1), None);
+        assert_eq!(downsample_bits(&[0; 1], 4, 2, 2, 1), None, "short rows");
+        assert_eq!(downsample_bits(&[], u32::MAX, u32::MAX, 1, 1), None);
+    }
+
+    proptest::proptest! {
+        /// Any bitmap, to any size no larger, gives what the slow way gives; all 1s stay all 1s.
+        #[test]
+        fn it_matches_the_slow_way(
+            w in 1u32..40,
+            h in 1u32..16,
+            nw_part in 0.0f64..1.0,
+            nh_part in 0.0f64..1.0,
+            seed in proptest::collection::vec(0u8..=255, 1..64),
+        ) {
+            let (nw, nh) = (1 + (f64::from(w - 1) * nw_part) as u32, 1 + (f64::from(h - 1) * nh_part) as u32);
+            let len = (w as usize).div_ceil(8) * h as usize;
+            let data: Vec<u8> = seed.iter().cycle().take(len).copied().collect();
+            proptest::prop_assert_eq!(downsample_bits(&data, w, h, nw, nh), Some(naive(&data, w, h, nw, nh)));
+            let white = downsample_bits(&vec![0xFF; len], w, h, nw, nh).unwrap();
+            proptest::prop_assert_eq!(white, naive(&vec![0xFF; len], w, h, nw, nh));
+            proptest::prop_assert!(naive(&vec![0xFF; len], w, h, nw, nh).iter().any(|b| *b != 0));
+        }
     }
 }

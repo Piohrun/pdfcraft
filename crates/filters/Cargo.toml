@@ -12,10 +12,11 @@ workspace = true
 
 [dependencies]
 fax.workspace = true
+# CCITT fax decoding (`decode_ccitt`); already in the tree through hayro.
+hayro-ccitt.workspace = true
 flate2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-hayro-ccitt.workspace = true
 proptest.workspace = true
 weezl.workspace = true
