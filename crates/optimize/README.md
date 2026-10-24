@@ -43,10 +43,11 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
     would have to follow. On a 600 ppi text page, Group 4 at 300 ppi is half the size.
   - **Compression:** CCITT Group 4 (`pdfcraft_filters::encode_g4`), or 1-bit Flate when that is
     smaller, which only a resampled image or one packed from eight bits may be: a 1-bit image that
-    is only stored again becomes Group 4 or stays. A CCITT image is only decoded to be resampled,
-    unless another filter such as `ASCII85Decode` wraps it, which storing it again drops. With Retain, a resampled image keeps its kind of
-    compression (CCITT, or Flate) and nothing else changes; eight-bit grey is then left to the grey
-    settings. Every change is kept only when it is smaller as stored.
+    is only stored again becomes Group 4 or stays. Group 4 alone is only decoded to be resampled;
+    Group 3, or Group 4 inside another filter such as `ASCII85Decode`, is stored again as Group 4
+    alone when that is smaller. With Retain, a resampled image keeps its kind of compression (CCITT,
+    or Flate) and nothing else changes; eight-bit grey is then left to the grey settings. Every
+    change is kept only when it is smaller as stored.
   - Apart from the downsampling it is lossless: the samples keep their meaning, so the colour
     space, decode array and `/Mask` stay. Group 4 wins on scans, whose ragged edges defeat Flate;
     on clean computer-drawn 1-bit art Flate can be smaller. Not yet: JBIG2, Group 3 to Group 4

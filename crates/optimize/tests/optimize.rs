@@ -635,6 +635,78 @@ fn black_and_white_images_above_450_ppi_are_averaged_down_to_300() {
     assert!(differ * 200 < before.len(), "{differ} of {} channel values differ visibly", before.len());
 }
 
+/// `rows` coded as CCITT Group 3, one-dimensional (`/K 0`): each row its runs in turn, white first,
+/// with ITU-T T.4's terminating codes for the few lengths used here.
+fn group_3(rows: &[&[u32]]) -> Vec<u8> {
+    let code = |white: bool, run: u32| match (white, run) {
+        (true, 0) => "00110101",
+        (true, 8) => "10011",
+        (true, 16) => "101010",
+        (true, 32) => "00011011",
+        (false, 8) => "000101",
+        (false, 16) => "0000010111",
+        (false, 32) => "000001101010",
+        _ => panic!("no code here for a run of {run}"),
+    };
+    let bits: String = rows.iter().flat_map(|row| row.iter().enumerate().map(|(i, run)| code(i % 2 == 0, *run))).collect();
+    bits.as_bytes().chunks(8).map(|c| c.iter().enumerate().fold(0u8, |b, (i, d)| b | (u8::from(*d == b'1') << (7 - i)))).collect()
+}
+
+/// A Group 3 fax image is stored again as Group 4 when that is smaller, the same picture (to the
+/// pixel on the page); with Retain it stays Group 3.
+#[test]
+fn group_3_fax_images_become_group_4() {
+    let (w, h) = (64u32, 64u32);
+    let runs: Vec<&[u32]> = [&[32, 32][..], &[16; 4], &[8; 8], &[0, 16, 16, 32]].into_iter().flat_map(|r| std::iter::repeat_n(r, 16)).collect();
+    // White is 1, as CCITTFaxDecode gives it without /BlackIs1.
+    let mut bits = Vec::new();
+    for row in &runs {
+        let mut packed = [0u8; 8];
+        let mut x = 0;
+        for (i, run) in row.iter().enumerate() {
+            for p in x..x + *run as usize {
+                if i % 2 == 0 {
+                    packed[p / 8] |= 0x80 >> (p % 8);
+                }
+            }
+            x += *run as usize;
+        }
+        bits.extend(packed);
+    }
+    let g3 = group_3(&runs);
+    let p = pdfcraft_filters::CcittParams { k: 0, columns: w.into(), ..Default::default() };
+    assert_eq!(pdfcraft_filters::decode_ccitt(&g3, &p, h).unwrap(), bits, "the Group 3 data is the picture");
+
+    let mut doc = Document::new_empty();
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(w.into()));
+    d.set(b"Height".to_vec(), Object::Int(h.into()));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    d.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+    let mut parms = Dict::new();
+    parms.set(b"K".to_vec(), Object::Int(0));
+    parms.set(b"Columns".to_vec(), Object::Int(w.into()));
+    parms.set(b"Rows".to_vec(), Object::Int(h.into()));
+    d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+    let fax = doc.add(Object::Stream(Stream::from_raw(d, g3.clone())));
+    page(&mut doc, &[("A", fax)], "q 64 0 0 64 100 600 cm /A Do Q");
+    let before = render(&doc);
+
+    let mut kept = doc.clone();
+    optimize(&mut kept, &Settings { mono: RETAIN, ..Settings::default() }).unwrap();
+    assert_eq!(stream(&kept, fax).raw[..], g3[..], "Retain keeps Group 3");
+
+    let r = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!((r.images_resampled, r.images_recompressed), (0, 1), "{r:?}");
+    let s = stream(&doc, fax);
+    assert_eq!(doc.fax_params(&s).map(|p| p.k), Some(-1), "Group 4");
+    assert!(s.raw.len() < g3.len(), "{} bytes, from {}", s.raw.len(), g3.len());
+    assert_eq!(doc.decoded_image(&s).unwrap(), bits, "the same picture");
+    assert!(render(&doc) == before, "the page looks the same");
+}
+
 #[test]
 fn settings_choose_what_happens() {
     let mut doc = Document::new_empty();

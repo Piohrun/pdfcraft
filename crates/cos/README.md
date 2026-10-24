@@ -26,6 +26,7 @@ let d    = doc.dict(&obj);                           // Option<Dict>, resolving 
 let data = stream.decoded()?;                        // filters applied on demand
 let data = doc.with_direct_parms(&stream).decoded()?; // /DecodeParms given by reference too
 let px   = doc.decoded_image(&stream)?;              // an image's samples, a CCITT fax image's too
+let fax  = doc.fax_params(&stream);                  // a CCITT fax image's /DecodeParms, Table 11 defaults
 
 doc.set(r, Object::Dict(d));                         // edit: lands in the overlay
 let r = doc.add(obj);                                // append a new object

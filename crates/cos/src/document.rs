@@ -1065,18 +1065,15 @@ impl Document {
         self.resolve(o).as_dict().cloned()
     }
 
-    /// The samples of image `s`, decoded: through its filters ([`Stream::decoded`]), or, for a
-    /// CCITT fax image (its last filter), through the filters before it and then
-    /// [`pdfcraft_filters::decode_ccitt`] with its `/DecodeParms` (resolved; the dictionary of a
-    /// lone filter, or its entry in an array), as `CCITTFaxDecode` gives them (ISO 32000-2 §7.4.6).
-    /// Parameters given by reference count, for every filter ([`Document::with_direct_parms`]).
-    /// A fax image's `/Columns` has to be its `/Width`. Up to its `/Height` rows are decoded,
-    /// whatever `/Rows` says, within [`MAX_DECODED`] bytes; damaged data gives fewer, so a caller
-    /// checks it has the rows it needs.
-    pub fn decoded_image(&self, s: &Stream) -> Result<Vec<u8>, CosError> {
-        let s = &*self.with_direct_parms(s);
-        let chain = s.readable_filters().map_err(|e| CosError::Filter(e.to_string()))?;
-        let Some(((pdfcraft_filters::Filter::CcittFax, _), before)) = chain.split_last() else { return s.decoded() };
+    /// The CCITT parameters of image `s` when its last filter is `CCITTFaxDecode`: its
+    /// `/DecodeParms` (resolved; the dictionary of a lone filter, or its entry in an array), with the
+    /// defaults of ISO 32000-2 Table 11 for what that leaves out. `None` for another image, and for
+    /// one whose `/Filter` isn't a name or an array of names.
+    pub fn fax_params(&self, s: &Stream) -> Option<pdfcraft_filters::CcittParams> {
+        let chain = s.readable_filters().ok()?;
+        if !matches!(chain.last(), Some((pdfcraft_filters::Filter::CcittFax, _))) {
+            return None;
+        }
         // Its place in /Filter, /Crypt included, pairs it with its /DecodeParms entry (§7.4.1).
         let index = match s.dict.get(b"Filter") {
             Some(Object::Array(a)) => a.len().saturating_sub(1),
@@ -1094,17 +1091,30 @@ impl Document {
             _ => default,
         };
         let d = pdfcraft_filters::CcittParams::default();
-        let p = pdfcraft_filters::CcittParams {
+        Some(pdfcraft_filters::CcittParams {
             k: int(b"K", d.k),
             columns: int(b"Columns", d.columns),
-            // As many rows as the image has: a /Rows below /Height would cut the picture short,
-            // and rows past /Height aren't drawn.
-            rows: 0,
+            rows: int(b"Rows", d.rows),
             end_of_line: flag(b"EndOfLine", d.end_of_line),
             encoded_byte_align: flag(b"EncodedByteAlign", d.encoded_byte_align),
             end_of_block: flag(b"EndOfBlock", d.end_of_block),
             black_is_1: flag(b"BlackIs1", d.black_is_1),
-        };
+        })
+    }
+
+    /// The samples of image `s`, decoded: through its filters ([`Stream::decoded`]), or, for a
+    /// CCITT fax image (its last filter), through the filters before it and then
+    /// [`pdfcraft_filters::decode_ccitt`] with its [`Document::fax_params`], as `CCITTFaxDecode`
+    /// gives them (ISO 32000-2 §7.4.6). Parameters given by reference count, for every filter
+    /// ([`Document::with_direct_parms`]). A fax image's `/Columns` has to be its `/Width`. Up to
+    /// its `/Height` rows are decoded, whatever `/Rows` says, within [`MAX_DECODED`] bytes; damaged
+    /// data gives fewer, so a caller checks it has the rows it needs.
+    pub fn decoded_image(&self, s: &Stream) -> Result<Vec<u8>, CosError> {
+        let s = &*self.with_direct_parms(s);
+        let Some(p) = self.fax_params(s) else { return s.decoded() };
+        // As many rows as the image has: a /Rows below /Height would cut the picture short, and
+        // rows past /Height aren't drawn.
+        let p = pdfcraft_filters::CcittParams { rows: 0, ..p };
         if s.dict.int(b"Width") != Some(p.columns) {
             return Err(CosError::Filter("a fax image's /Columns aren't its /Width".into()));
         }
@@ -1112,9 +1122,12 @@ impl Document {
         let stride = usize::try_from(p.columns).unwrap_or(usize::MAX).div_ceil(8).max(1);
         let rows = u32::try_from(MAX_DECODED / stride).unwrap_or(u32::MAX).min(height);
         // The filters before it, such as ASCII85Decode, are undone first.
-        let data = match before {
-            [] => Cow::Borrowed(&s.raw[..]),
-            _ => Cow::Owned(pdfcraft_filters::decode_tolerant(before, &s.raw, MAX_DECODED).map_err(|e| CosError::Filter(e.to_string()))?.0),
+        let chain = s.readable_filters().map_err(|e| CosError::Filter(e.to_string()))?;
+        let data = match chain.split_last() {
+            Some((_, before)) if !before.is_empty() => {
+                Cow::Owned(pdfcraft_filters::decode_tolerant(before, &s.raw, MAX_DECODED).map_err(|e| CosError::Filter(e.to_string()))?.0)
+            }
+            _ => Cow::Borrowed(&s.raw[..]),
         };
         pdfcraft_filters::decode_ccitt(&data, &p, rows).map_err(|e| CosError::Filter(e.to_string()))
     }
@@ -2463,7 +2476,15 @@ mod tests {
         assert_eq!(image(&doc, Some(Object::Dict(by_reference)), 10, 3).unwrap(), bits, "/K and /Columns by reference");
         let mut understated = parms.clone();
         understated.set(b"Rows".to_vec(), Object::Int(1));
-        assert_eq!(image(&doc, Some(Object::Dict(understated)), 10, 3).unwrap(), bits, "/Height rows, whatever /Rows says");
+        assert_eq!(image(&doc, Some(Object::Dict(understated.clone())), 10, 3).unwrap(), bits, "/Height rows, whatever /Rows says");
+        // The parameters as the file gives them, /Rows included, and Table 11's defaults.
+        let mut d = Dict::new();
+        d.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(understated));
+        let p = doc.fax_params(&Stream::from_raw(d.clone(), Vec::new())).unwrap();
+        assert_eq!((p.k, p.columns, p.rows, p.end_of_block, p.black_is_1), (-1, 10, 1, true, false));
+        d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        assert!(doc.fax_params(&Stream::from_raw(d, Vec::new())).is_none(), "not a fax image");
         assert!(matches!(image(&doc, Some(Object::Dict(parms.clone())), 12, 3), Err(CosError::Filter(_))), "/Columns other than /Width");
         assert!(matches!(image(&doc, None, 10, 3), Err(CosError::Filter(_))), "the default 1728 /Columns");
         let mut plain = Dict::new();
