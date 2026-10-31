@@ -629,7 +629,10 @@ fn protecting_drops_a_crypt_filter_selected_by_reference() {
         let contents = back.get(contents_of(&back));
         let filter = contents.as_dict().unwrap().get(b"Filter");
         match form {
-            8 => assert!(matches!(filter, Some(Object::Array(a)) if a.len() == 1), "form 8: the other filter stays: {filter:?}"),
+            8 => assert!(
+                matches!(filter, Some(Object::Array(a)) if matches!(a.as_slice(), [Object::Ref(_)])),
+                "form 8: the other filter stays: {filter:?}"
+            ),
             _ => assert_eq!(filter, None, "form {form}"),
         }
         assert!(hayro_syntax::Pdf::new(bytes).is_ok(), "form {form}");
@@ -666,7 +669,7 @@ fn protecting_copies_no_large_object_into_every_stream() {
     let mut large = pdfcraft_cos::Dict::new();
     large.set(b"Pad".to_vec(), pad.clone());
     let parms = doc.add(Object::Array(vec![Object::Null, Object::Dict(large)]));
-    let filter = doc.add(Object::Array(vec![Object::name("Crypt"), Object::name("ASCIIHexDecode"), pad]));
+    let filter = doc.add(Object::Array(vec![Object::name("Crypt"), Object::Name(vec![b'A'; 100_000]), pad]));
     let mut streams = Vec::new();
     for _ in 0..200 {
         let mut by_parms = pdfcraft_cos::Dict::new();
@@ -897,6 +900,13 @@ fn a_signature_dictionary_is_known_in_every_form() {
         sig.set(b"Contents".to_vec(), Object::String(PdfString { bytes, hex: true }));
         signatures.push(Object::Ref(doc.add(Object::Dict(sig))));
     }
+    // Nested in another object, it follows nothing, but known directly it is one all the same.
+    let mut nested = pdfcraft_cos::Dict::new();
+    nested.set(b"Type".to_vec(), Object::name("Sig"));
+    nested.set(b"Contents".to_vec(), Object::String(PdfString { bytes: vec![0xAB, 0xBA], hex: true }));
+    let mut field = pdfcraft_cos::Dict::new();
+    field.set(b"V".to_vec(), Object::Dict(nested));
+    signatures.push(Object::Ref(doc.add(Object::Dict(field))));
     // Neither of what makes one: a string /Contents alone is anybody's, so it's encrypted.
     let mut other = pdfcraft_cos::Dict::new();
     other.set(b"Contents".to_vec(), Object::String(PdfString { bytes: vec![0xAB, 0xCD], hex: true }));
@@ -912,7 +922,7 @@ fn a_signature_dictionary_is_known_in_every_form() {
     })
     .unwrap();
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
-    for contents in ["DEAD", "BEEF", "CAFE", "F00D", "D00D"] {
+    for contents in ["DEAD", "BEEF", "CAFE", "F00D", "D00D", "ABBA"] {
         assert!(holds(&bytes, &format!("<{contents}>")), "{contents}: written as is");
     }
     assert!(!holds(&bytes, "<ABCD>"), "without a /ByteRange it is no signature");
@@ -1039,6 +1049,46 @@ fn an_object_stream_reached_from_a_selector_keeps_its_members() {
     let back = Document::open(Arc::new(saved)).unwrap();
     let catalog = back.get(back.root().unwrap());
     assert_eq!(keep(&back, catalog.as_dict().unwrap().get(b"B").unwrap()).as_deref(), Some(b"yes".as_slice()), "after a full save");
+}
+
+/// `walk` goes as deep as an object nests, so following a reference from down there adds that depth
+/// again for each object it loads: this file, under 10 KB, overflowed a 2 MiB stack and took the
+/// process with it. Only the object itself follows references, and it does so in very little stack.
+#[test]
+fn nested_dictionaries_load_nothing_on_a_small_stack() {
+    let file = classic_file();
+    let first = 960u32;
+    let objects: Vec<(u32, Vec<u8>)> = (first..first + 40)
+        .map(|num| {
+            let open = "[".repeat(120);
+            let close = "]".repeat(120);
+            (num, format!("{open}<< /Contents () /Type {} 0 R >>{close}", num + 1).into_bytes())
+        })
+        .collect();
+    let trailer = format!("/Root {} 0 R /Encrypt {} 0 R /ID [<{id}> <{id}>]", file.root.num, file.encrypt.num, id = hex(&file.id));
+    let bytes = updated(&file.bytes, &objects, &trailer);
+    let reading = std::thread::Builder::new().stack_size(1 << 20).spawn(move || {
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        doc.get(ObjRef::new(first, 0)).as_array().is_some()
+    });
+    assert_eq!(reading.unwrap().join().ok(), Some(true));
+}
+
+/// The object itself can follow references, a ladder of them as long as loading may nest, and that
+/// fits a small stack too.
+#[test]
+fn a_ladder_of_signature_checks_fits_a_small_stack() {
+    let file = classic_file();
+    let first = 960u32;
+    let objects: Vec<(u32, Vec<u8>)> =
+        (first..first + 40).map(|num| (num, format!("<< /Contents () /Type {} 0 R >>", num + 1).into_bytes())).collect();
+    let trailer = format!("/Root {} 0 R /Encrypt {} 0 R /ID [<{id}> <{id}>]", file.root.num, file.encrypt.num, id = hex(&file.id));
+    let bytes = updated(&file.bytes, &objects, &trailer);
+    let reading = std::thread::Builder::new().stack_size(1 << 20).spawn(move || {
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        doc.get(ObjRef::new(first, 0)).as_dict().is_some()
+    });
+    assert_eq!(reading.unwrap().join().ok(), Some(true));
 }
 
 /// An object can hold any number of dictionaries. Finding out whether each is a signature's took a

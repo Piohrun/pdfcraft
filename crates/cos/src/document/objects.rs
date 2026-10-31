@@ -527,8 +527,14 @@ impl Document {
         Ok(stm)
     }
 
-    /// Last-resort lookup: scan the file for `num G obj`.
+    /// Last-resort lookup: scan the file for `num G obj`. What isn't there is remembered: each miss
+    /// reads the whole file, and a file can refer to such an object from everywhere.
     fn scan_for(&self, num: u32) -> Option<(ObjRef, Object)> {
+        if self.unfound.lock().is_ok_and(|unfound| unfound.contains(&num)) {
+            return None;
+        }
+        #[cfg(test)]
+        super::tests::FILE_SCANS.with(|scans| scans.set(scans.get() + 1));
         let needle = format!("{num} ");
         let data = &self.data;
         let mut found = None;
@@ -543,6 +549,11 @@ impl Document {
             {
                 found = Some((id, o)); // keep the last (newest) definition
             }
+        }
+        if found.is_none()
+            && let Ok(mut unfound) = self.unfound.lock()
+        {
+            unfound.insert(num);
         }
         found
     }

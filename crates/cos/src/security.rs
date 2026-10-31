@@ -17,10 +17,9 @@ use crate::{Dict, Document, Object, PdfString, Stream};
 
 /// How many references one read or write of an object may follow, with all that it loads on the
 /// way. How an object is treated can be given by reference, and what that loads can do the same: a
-/// file could make one read a tree of them, each object read again once the cache has let it go, or
-/// have every dictionary of an object refer to something that takes a scan of the file to not find.
-/// An object takes a few of these, and a dozen if every part of it is given by reference; past
-/// this they read as absent.
+/// file could make one read a tree of them, each object read again once the cache has let it go.
+/// An object takes a few of these, and two dozen if every part of it is given by reference; past
+/// this they read as absent. The parameters of an object stream, read together, count as one.
 const MAX_FOLLOWED: u32 = 32;
 
 std::thread_local! {
@@ -157,14 +156,19 @@ fn named_crypt_filter(doc: &Document, dict: &Dict) -> Option<Vec<u8>> {
 /// `/Contents` alongside an array `/ByteRange` (`/Type` is optional). A signature dictionary
 /// has no `/Subtype`; a dictionary with one (an annotation, whose `/Contents` is the comment
 /// text) or with another `/Type` is never exempt, whatever else it carries.
-fn is_signature_dict(doc: &Document, d: &Dict) -> bool {
-    // All this decides is what happens to such a /Contents, so nothing is followed without one: an
-    // object can hold any number of dictionaries.
+/// With `doc` its entries are read through references; a dictionary nested in another object
+/// has none (see [`transform`]).
+fn is_signature_dict(doc: Option<&Document>, d: &Dict) -> bool {
+    // All this decides is what happens to such a /Contents.
     if !matches!(d.get(b"Contents"), Some(Object::String(_))) {
         return false;
     }
     // A null entry, or one that refers to nothing, is an absent one (ISO 32000-2 §7.3.7, §7.3.10).
-    let entry = |key: &[u8]| d.get(key).map(|v| followed(doc, v)).filter(|v| !matches!(**v, Object::Null));
+    let entry = |key: &[u8]| {
+        let value = d.get(key)?;
+        let held = doc.map_or(Held::Direct(value), |doc| followed(doc, value));
+        (!matches!(*held, Object::Null)).then_some(held)
+    };
     if entry(b"Subtype").is_some() {
         return false;
     }
@@ -174,6 +178,10 @@ fn is_signature_dict(doc: &Document, d: &Dict) -> bool {
     }
 }
 
+/// Longer than any filter's name. A name can be of any length, and a chain every stream shares can
+/// hold a long one.
+const MAX_FILTER_NAME: usize = 127;
+
 /// The dictionary of `source` without the `/Crypt` entries of its filter chain and their decode
 /// parameters. The two come out direct when given by reference, which every stream of a file can
 /// share, so of what was shared only small values are copied: filter names, and the parameters
@@ -182,7 +190,8 @@ fn is_signature_dict(doc: &Document, d: &Dict) -> bool {
 fn drop_crypt_filter(doc: &Document, source: &Stream) -> Dict {
     let entry = |f: &Object| match f {
         f if is_crypt(doc, f) => Object::name("Crypt"),
-        Object::Name(_) | Object::Ref(_) => f.clone(),
+        Object::Name(n) if n.len() <= MAX_FILTER_NAME => f.clone(),
+        Object::Ref(_) => f.clone(),
         _ => Object::Null,
     };
     let filter = source.dict.get(b"Filter").map(|f| followed(doc, f));
@@ -244,49 +253,71 @@ pub(crate) fn transform(doc: &Document, h: &SecurityHandler, o: &Object, num: u3
         let bytes = if decrypt { h.decrypt_string(num, generation, &s.bytes) } else { h.encrypt_string(num, generation, &s.bytes) };
         PdfString { bytes, hex: s.hex || !decrypt }
     };
-    walk(doc, o, &strings, h, num, generation, pass)
+    // References are followed here only, for the object itself, never for what is nested in it.
+    // `walk` goes deep, and a load from down there adds that depth again for each object loaded,
+    // which overflowed the stack on a 10 KB file. A stream can't be nested, and a dictionary that
+    // is reads as it says directly.
+    match o {
+        Object::Stream(s) => stream(doc, s, &strings, h, num, generation, pass),
+        Object::Dict(d) if is_signature_dict(Some(doc), d) => signature_dict(d, &strings),
+        o => walk(o, &strings),
+    }
 }
 
-fn walk(doc: &Document, o: &Object, strings: &dyn Fn(&PdfString) -> PdfString, h: &SecurityHandler, num: u32, generation: u16, pass: Pass) -> Object {
-    let decrypt = pass == Pass::Decrypt;
+/// `d`, a signature dictionary, with the strings of everything but its `/Contents` transformed.
+fn signature_dict(d: &Dict, strings: &dyn Fn(&PdfString) -> PdfString) -> Object {
+    Object::Dict(
+        d.iter()
+            .map(|(k, v)| match (k.as_slice(), v) {
+                (b"Contents", Object::String(_)) => (k.clone(), v.clone()),
+                _ => (k.clone(), walk(v, strings)),
+            })
+            .collect(),
+    )
+}
+
+fn walk(o: &Object, strings: &dyn Fn(&PdfString) -> PdfString) -> Object {
     match o {
         Object::String(s) => Object::String(strings(s)),
-        Object::Array(a) => Object::Array(a.iter().map(|x| walk(doc, x, strings, h, num, generation, pass)).collect()),
-        Object::Dict(d) if is_signature_dict(doc, d) => Object::Dict(
-            d.iter()
-                .map(|(k, v)| match (k.as_slice(), v) {
-                    (b"Contents", Object::String(_)) => (k.clone(), v.clone()),
-                    _ => (k.clone(), walk(doc, v, strings, h, num, generation, pass)),
-                })
-                .collect(),
-        ),
-        Object::Dict(d) => Object::Dict(d.iter().map(|(k, v)| (k.clone(), walk(doc, v, strings, h, num, generation, pass))).collect()),
-        Object::Stream(s) => {
-            let walked = |d: &Dict| -> Dict { d.iter().map(|(k, v)| (k.clone(), walk(doc, v, strings, h, num, generation, pass))).collect() };
-            let ty = s.dict.get(b"Type").map(|t| followed(doc, t));
-            let ty = ty.as_deref().and_then(Object::as_name);
-            // Cross-reference streams are never encrypted (§7.5.8), but only reading may trust the
-            // label: a stream a producer calls /XRef stays plaintext if writing believes it, and the
-            // writer builds its own cross-reference streams outside this transform.
-            if (decrypt && ty == Some(b"XRef")) || (ty == Some(b"Metadata") && !h.encrypts_metadata()) {
-                return Object::Stream(Stream { dict: walked(&s.dict), raw: s.raw.clone() });
-            }
-            let mut named = named_crypt_filter(doc, &s.dict);
-            // Before the walk, which then encrypts what is in the dictionary this leaves.
-            let foreign = pass == Pass::EncryptReplacing && named.as_deref().is_some_and(|n| !h.dict().crypt_filters.iter().any(|(f, _)| f == n));
-            let dropped = foreign.then(|| drop_crypt_filter(doc, s));
-            if dropped.is_some() {
-                named = None;
-            }
-            let dict = walked(dropped.as_ref().unwrap_or(&s.dict));
-            let kind = match (&named, ty) {
-                (Some(n), _) => StreamKind::Named(n),
-                (None, Some(b"EmbeddedFile")) => StreamKind::EmbeddedFile,
-                _ => StreamKind::Normal,
-            };
-            let raw = if decrypt { h.decrypt_stream(num, generation, &s.raw, kind) } else { h.encrypt_stream(num, generation, &s.raw, kind) };
-            Object::Stream(Stream { dict, raw: raw.into() })
-        }
+        Object::Array(a) => Object::Array(a.iter().map(|x| walk(x, strings)).collect()),
+        Object::Dict(d) if is_signature_dict(None, d) => signature_dict(d, strings),
+        Object::Dict(d) => Object::Dict(d.iter().map(|(k, v)| (k.clone(), walk(v, strings))).collect()),
         other => other.clone(),
     }
+}
+
+fn stream(
+    doc: &Document,
+    s: &Stream,
+    strings: &dyn Fn(&PdfString) -> PdfString,
+    h: &SecurityHandler,
+    num: u32,
+    generation: u16,
+    pass: Pass,
+) -> Object {
+    let decrypt = pass == Pass::Decrypt;
+    let walked = |d: &Dict| -> Dict { d.iter().map(|(k, v)| (k.clone(), walk(v, strings))).collect() };
+    let ty = s.dict.get(b"Type").map(|t| followed(doc, t));
+    let ty = ty.as_deref().and_then(Object::as_name);
+    // Cross-reference streams are never encrypted (§7.5.8), but only reading may trust the
+    // label: a stream a producer calls /XRef stays plaintext if writing believes it, and the
+    // writer builds its own cross-reference streams outside this transform.
+    if (decrypt && ty == Some(b"XRef")) || (ty == Some(b"Metadata") && !h.encrypts_metadata()) {
+        return Object::Stream(Stream { dict: walked(&s.dict), raw: s.raw.clone() });
+    }
+    let mut named = named_crypt_filter(doc, &s.dict);
+    // Before the walk, which then encrypts what is in the dictionary this leaves.
+    let foreign = pass == Pass::EncryptReplacing && named.as_deref().is_some_and(|n| !h.dict().crypt_filters.iter().any(|(f, _)| f == n));
+    let dropped = foreign.then(|| drop_crypt_filter(doc, s));
+    if dropped.is_some() {
+        named = None;
+    }
+    let dict = walked(dropped.as_ref().unwrap_or(&s.dict));
+    let kind = match (&named, ty) {
+        (Some(n), _) => StreamKind::Named(n),
+        (None, Some(b"EmbeddedFile")) => StreamKind::EmbeddedFile,
+        _ => StreamKind::Normal,
+    };
+    let raw = if decrypt { h.decrypt_stream(num, generation, &s.raw, kind) } else { h.encrypt_stream(num, generation, &s.raw, kind) };
+    Object::Stream(Stream { dict, raw: raw.into() })
 }

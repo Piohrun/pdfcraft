@@ -1,5 +1,33 @@
 use super::*;
 
+std::thread_local! {
+    /// How many times `Document::scan_for` read the file on this thread.
+    pub(super) static FILE_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// A scan that doesn't find an object isn't made again: each reads the whole file, and a file can
+/// refer to such an object from every object it has.
+#[test]
+fn what_a_scan_of_the_file_did_not_find_is_remembered() {
+    let body = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\n";
+    let mut out = body.to_vec();
+    let xref = out.len();
+    out.extend_from_slice(b"xref\n0 4\n0000000000 65535 f \n");
+    out.extend_from_slice(format!("{:010} 00000 n \n", 9).as_bytes());
+    out.extend_from_slice(format!("{:010} 00000 n \n", body.iter().position(|b| *b == b'\n').unwrap() + 49).as_bytes());
+    out.extend_from_slice(b"0000000001 00000 n \n");
+    out.extend_from_slice(format!("trailer << /Size 4 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    FILE_SCANS.with(|scans| scans.set(0));
+    for _ in 0..5 {
+        assert!(doc.try_get(3).is_err());
+    }
+    assert_eq!(FILE_SCANS.with(std::cell::Cell::get), 1);
+    let clone = doc.clone();
+    assert!(clone.try_get(3).is_err());
+    assert_eq!(FILE_SCANS.with(std::cell::Cell::get), 1, "a clone has the same file");
+}
+
 /// An object can be nothing but a reference to another. A chain of them is followed, and one that
 /// goes round ends in what isn't a dictionary or a name, without hanging.
 #[test]

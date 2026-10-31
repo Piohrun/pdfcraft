@@ -451,20 +451,24 @@ impl ObjectStreamBatch {
     }
 }
 
-/// Trailer keys a full rewrite generates itself. Everything else is copied, with references
-/// renumbered, so a save does not drop metadata the reader accepted.
 /// `/ID` for the trailer, direct, as it has to be with `/Encrypt`: nothing else in the file holds
-/// what it refers to now. Given by reference it is at most two strings, however many references a
-/// file gave, so that one large string isn't copied for each of them.
+/// what it refers to now. Given by reference it is two entries at most, however many references a
+/// file gave, so that one large string isn't copied for each. An entry that isn't a string stays in
+/// its place as an empty one, which is how the key read it.
 fn direct_id(doc: &Document, id: &Object) -> Object {
     if matches!(id, Object::Array(a) if !a.iter().any(|s| matches!(s, Object::Ref(_)))) {
         return id.clone();
     }
+    let entry = |s: &Object| match &*doc.resolve(s) {
+        s @ Object::String(_) => s.clone(),
+        _ => Object::String(crate::PdfString { bytes: Vec::new(), hex: true }),
+    };
     let held = doc.resolve(id);
-    let strings = held.as_array().into_iter().flatten().take(2).map(|s| doc.resolve(s)).filter(|s| s.as_string().is_some());
-    Object::Array(strings.map(|s| (*s).clone()).collect())
+    Object::Array(held.as_array().into_iter().flatten().take(2).map(entry).collect())
 }
 
+/// Trailer keys a full rewrite generates itself. Everything else is copied, with references
+/// renumbered, so a save does not drop metadata the reader accepted.
 fn trailer_key_rewritten(key: &[u8]) -> bool {
     matches!(
         key,
@@ -684,6 +688,15 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 #[cfg(test)]
 mod tests {
+    /// `/ID` by reference comes out direct, each entry where it was: the key is made from the first.
+    #[test]
+    fn a_file_identifier_keeps_its_entries_in_their_places() {
+        let doc = Document::new_empty();
+        let string = |bytes: &[u8]| Object::String(crate::PdfString { bytes: bytes.to_vec(), hex: true });
+        let nowhere = Object::Ref(ObjRef::new(9_999, 0));
+        assert_eq!(super::direct_id(&doc, &Object::Array(vec![nowhere, string(b"ab")])), Object::Array(vec![string(b""), string(b"ab")]));
+    }
+
     use proptest::prelude::*;
 
     use super::*;
