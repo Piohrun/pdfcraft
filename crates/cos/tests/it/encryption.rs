@@ -644,68 +644,80 @@ fn protecting_drops_a_crypt_filter_selected_by_reference() {
 /// and one that names no filter follows the document's. Loading ends either way.
 #[test]
 fn a_crypt_filter_reference_to_itself_or_nothing_reads_as_absent() {
-    let open_with = |change: &dyn Fn(ObjRef) -> (Object, Object)| {
-        let mut doc = Document::open(Arc::new(protect(Algorithm::Aes128, "", "owner", -1))).unwrap();
-        let selected = change(contents_of(&doc));
-        select(&mut doc, selected);
-        let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
-        let encrypted = !holds(&saved, "Secret page");
-        (encrypted, raw_content(&Document::open(Arc::new(saved)).unwrap()))
-    };
-    let dangling = Object::Ref(ObjRef::new(9_999, 0));
-    let parms = |n: Object| {
+    let named = |n: Object| {
         let mut d = pdfcraft_cos::Dict::new();
         d.set(b"Name".to_vec(), n);
         Object::Dict(d)
     };
-    let crypt = Object::name("Crypt");
-    let cases: [(&str, bool, Box<dyn Fn(ObjRef) -> (Object, Object)>); 6] = [
-        ("/Filter to itself", true, Box::new(|me| (Object::Ref(me), Object::Null))),
-        (
-            "/Filter nowhere",
-            true,
-            Box::new({
-                let d = dangling.clone();
-                move |_| (d.clone(), Object::Null)
-            }),
-        ),
-        (
-            "/DecodeParms to itself",
-            false,
-            Box::new({
-                let c = crypt.clone();
-                move |me| (c.clone(), Object::Ref(me))
-            }),
-        ),
-        (
-            "/DecodeParms nowhere",
-            false,
-            Box::new({
-                let (c, d) = (crypt.clone(), dangling.clone());
-                move |_| (c.clone(), d.clone())
-            }),
-        ),
-        (
-            "/Name to itself",
-            false,
-            Box::new({
-                let c = crypt.clone();
-                move |me| (c.clone(), parms(Object::Ref(me)))
-            }),
-        ),
-        (
-            "/Name nowhere",
-            false,
-            Box::new({
-                let (c, d) = (crypt.clone(), dangling.clone());
-                move |_| (c.clone(), parms(d.clone()))
-            }),
-        ),
-    ];
-    for (what, encrypted, change) in cases {
-        let (was_encrypted, data) = open_with(&*change);
-        assert_eq!(was_encrypted, encrypted, "{what}");
-        assert_eq!(data, SECRET, "{what}");
+    for (what, encrypted) in [
+        ("/Filter to itself", true),
+        ("/Filter nowhere", true),
+        ("/DecodeParms to itself", false),
+        ("/DecodeParms nowhere", false),
+        ("/Name to itself", false),
+        ("/Name nowhere", false),
+    ] {
+        let mut doc = Document::open(Arc::new(protect(Algorithm::Aes128, "", "owner", -1))).unwrap();
+        let me = Object::Ref(contents_of(&doc));
+        let nowhere = Object::Ref(ObjRef::new(9_999, 0));
+        let crypt = Object::name("Crypt");
+        select(
+            &mut doc,
+            match what {
+                "/Filter to itself" => (me, Object::Null),
+                "/Filter nowhere" => (nowhere, Object::Null),
+                "/DecodeParms to itself" => (crypt, me),
+                "/DecodeParms nowhere" => (crypt, nowhere),
+                "/Name to itself" => (crypt, named(me)),
+                _ => (crypt, named(nowhere)),
+            },
+        );
+        let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        assert_eq!(!holds(&saved, "Secret page"), encrypted, "{what}");
+        assert_eq!(raw_content(&Document::open(Arc::new(saved)).unwrap()), SECRET, "{what}");
+    }
+}
+
+/// A lone parameter dictionary belongs to the first filter, so `/Crypt` behind another filter has
+/// none of its own and is `/Identity` (ISO 32000-2 §7.4.1), whatever that dictionary says.
+#[test]
+fn a_lone_parameter_dictionary_is_the_first_filters() {
+    let mut doc = Document::open(Arc::new(protect(Algorithm::Aes128, "", "owner", -1))).unwrap();
+    let mut parms = pdfcraft_cos::Dict::new();
+    parms.set(b"Name".to_vec(), Object::name("StdCF"));
+    let first = Object::Array(vec![Object::name("Crypt"), Object::name("ASCIIHexDecode")]);
+    let second = Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("Crypt")]);
+    select(&mut doc, (first, Object::Dict(parms.clone())));
+    assert!(!holds(&write_incremental(&doc, &SaveOptions::default()).unwrap(), "Secret page"), "first: it names StdCF");
+    select(&mut doc, (second, Object::Dict(parms)));
+    assert!(holds(&write_incremental(&doc, &SaveOptions::default()).unwrap(), "Secret page"), "second: it names nothing");
+}
+
+/// Dropping `/Crypt` takes its entry out of `/DecodeParms`, and an array too short to have one is
+/// left as it is, given directly or by reference.
+#[test]
+fn protecting_leaves_a_parameter_array_too_short_for_the_crypt_filter() {
+    for by_reference in [false, true] {
+        let mut doc = Document::open(Arc::new(fixture())).unwrap();
+        let short = Object::Array(vec![Object::Null]);
+        let parms = if by_reference { Object::Ref(doc.add(short)) } else { short };
+        select(&mut doc, (Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("Crypt")]), parms));
+        doc.set_encryption(&NewEncryption {
+            algorithm: Algorithm::Aes256,
+            user_password: "",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [7; 32],
+        })
+        .unwrap();
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        assert!(!holds(&bytes, "Secret page"), "by reference: {by_reference}");
+        let back = Document::open(Arc::new(bytes)).unwrap();
+        assert_eq!(raw_content(&back), SECRET, "by reference: {by_reference}");
+        let contents = back.get(contents_of(&back));
+        let filter = contents.as_dict().unwrap().get(b"Filter").unwrap().as_array().unwrap();
+        assert_eq!(filter.len(), 1, "only /Crypt goes");
     }
 }
 
