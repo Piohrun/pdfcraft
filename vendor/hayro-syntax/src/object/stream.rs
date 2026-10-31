@@ -74,38 +74,44 @@ impl<'a> Stream<'a> {
         let mut collected_filters = SmallVec::new();
         let mut collected_params = SmallVec::new();
 
+        // PdfCraft patch (30): `/DecodeParms` in either form, whichever form `/Filter` has: one filter
+        // in an array with a lone dictionary is an everyday spelling, and a lone dictionary is the
+        // first filter's. Read as the chain asks, so a long array costs no more than a short one.
+        let parms = self
+            .dict
+            .get::<Object<'_>>(DP)
+            .or_else(|| self.dict.get::<Object<'_>>(DECODE_PARMS));
+        let mut in_array = match &parms {
+            Some(Object::Array(a)) => Some(a.iter::<Object<'_>>()),
+            _ => None,
+        };
+        let mut lone = match parms {
+            Some(Object::Dict(d)) => Some(d),
+            _ => None,
+        };
+        let mut next_params = || {
+            lone.take()
+                .or_else(|| in_array.as_mut()?.next()?.into_dict())
+                .unwrap_or_default()
+        };
+
         if let Some(filter) = self
             .dict
             .get::<Name<'_>>(F)
             .or_else(|| self.dict.get::<Name<'_>>(FILTER))
             .and_then(Filter::from_name)
         {
-            let params = self
-                .dict
-                .get::<Dict<'_>>(DP)
-                .or_else(|| self.dict.get::<Dict<'_>>(DECODE_PARMS))
-                .unwrap_or_default();
-
             collected_filters.push(filter);
-            collected_params.push(params);
+            collected_params.push(next_params());
         } else if let Some(filters) = self
             .dict
             .get::<Array<'_>>(F)
             .or_else(|| self.dict.get::<Array<'_>>(FILTER))
         {
             let filters = filters.iter::<Name<'_>>().map(Filter::from_name);
-            let mut params = self
-                .dict
-                .get::<Array<'_>>(DP)
-                .or_else(|| self.dict.get::<Array<'_>>(DECODE_PARMS))
-                .map(|a| a.iter::<Object<'_>>());
 
             for filter in filters {
-                let params = params
-                    .as_mut()
-                    .and_then(|p| p.next())
-                    .and_then(|p| p.into_dict())
-                    .unwrap_or_default();
+                let params = next_params();
 
                 if let Some(filter) = filter {
                     collected_filters.push(filter);
@@ -124,6 +130,11 @@ impl<'a> Stream<'a> {
     /// name in that filter's parameters, or `/Identity` without one (ISO 32000-2 §7.4.10).
     fn crypt_filter(&self) -> Option<String> {
         let FiltersAndParams { filters, params } = self.filters_and_params();
+        // A chain longer than cos decodes names none there, so it names none here either:
+        // `pdfcraft_filters::MAX_CHAIN`, and `/Crypt`.
+        if filters.len() > 9 {
+            return None;
+        }
         let i = filters.iter().position(|f| matches!(f, Filter::Crypt))?;
         let name = params.get(i).and_then(|p| p.get::<Name<'_>>(NAME));
         Some(name.map_or_else(|| "Identity".to_string(), |n| n.as_str().to_string()))

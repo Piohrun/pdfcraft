@@ -541,6 +541,17 @@ fn selector(doc: &mut Document, form: usize, name: &str) -> Option<(Object, Obje
         7 => (Object::Array(vec![Object::Ref(doc.add(crypt))]), Object::Array(vec![named])),
         // Behind a filter given by reference: places in the two arrays pair up all the same.
         8 => (Object::Array(vec![Object::Ref(doc.add(Object::name("ASCIIHexDecode"))), crypt]), Object::Array(vec![Object::Null, named])),
+        // The two entries in different forms, which is how a lone filter is usually spelled.
+        9 => (Object::Array(vec![crypt]), named),
+        10 => (crypt, Object::Array(vec![named])),
+        // The filter twice, which names the first's.
+        11 => (Object::Array(vec![crypt.clone(), crypt]), Object::Array(vec![named.clone(), named])),
+        // A reference to a reference.
+        12 => {
+            let name = doc.add(Object::name(name));
+            let hop = doc.add(Object::Ref(name));
+            (crypt, parms(Object::Ref(hop)))
+        }
         _ => return None,
     })
 }
@@ -693,6 +704,32 @@ fn a_lone_parameter_dictionary_is_the_first_filters() {
     assert!(holds(&write_incremental(&doc, &SaveOptions::default()).unwrap(), "Secret page"), "second: it names nothing");
 }
 
+/// A lone parameter dictionary is the first filter's, so dropping a `/Crypt` behind that filter
+/// leaves it, and dropping one in front of it takes it away.
+#[test]
+fn protecting_keeps_the_parameters_of_the_filter_before_a_crypt_filter() {
+    let protected = |filters: Vec<Object>| {
+        let mut doc = Document::open(Arc::new(fixture())).unwrap();
+        let mut parms = pdfcraft_cos::Dict::new();
+        parms.set(b"Name".to_vec(), Object::name("MyCF"));
+        select(&mut doc, (Object::Array(filters), Object::Dict(parms)));
+        doc.set_encryption(&NewEncryption {
+            algorithm: Algorithm::Aes256,
+            user_password: "",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [7; 32],
+        })
+        .unwrap();
+        let back = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        back.get(contents_of(&back)).as_dict().unwrap().contains(b"DecodeParms")
+    };
+    let (hex, crypt) = (Object::name("ASCIIHexDecode"), Object::name("Crypt"));
+    assert!(protected(vec![hex.clone(), crypt.clone()]), "the first filter's, which stays");
+    assert!(!protected(vec![crypt, hex]), "/Crypt's, which goes");
+}
+
 /// Dropping `/Crypt` takes its entry out of `/DecodeParms`, and an array too short to have one is
 /// left as it is, given directly or by reference.
 #[test]
@@ -772,16 +809,37 @@ fn a_stream_type_given_by_reference_picks_its_crypt_filter() {
     assert!(holds(&write_incremental(&doc, &SaveOptions::default()).unwrap(), "Secret page"), "/EFF /Identity leaves it alone");
 }
 
-/// A signature dictionary's `/Type` by reference exempts its `/Contents` as one given directly.
+/// What makes a dictionary a signature's can be given by reference, and what is null or refers to
+/// nothing is absent: `/Contents` stays as written in each of these.
 #[test]
-fn a_signature_dictionary_typed_by_reference_keeps_its_contents() {
+fn a_signature_dictionary_is_known_in_every_form() {
     let mut doc = Document::open(Arc::new(fixture())).unwrap();
     let ty = doc.add(Object::name("Sig"));
-    let mut sig = pdfcraft_cos::Dict::new();
-    sig.set(b"Type".to_vec(), Object::Ref(ty));
-    sig.set(b"Contents".to_vec(), Object::String(PdfString { bytes: vec![0x30, 0x82, 0xDE, 0xAD], hex: true }));
-    let sig = doc.add(Object::Dict(sig));
-    doc.update_dict(doc.root().unwrap(), |c| c.set(b"Test".to_vec(), Object::Ref(sig))).unwrap();
+    let range = Object::Array([0, 10, 20, 30].into_iter().map(Object::Int).collect());
+    let by_reference = doc.add(range.clone());
+    let nowhere = Object::Ref(ObjRef::new(9_999, 0));
+    let forms: [(Vec<(&str, Object)>, &str); 5] = [
+        (vec![("Type", Object::Ref(ty))], "DEAD"),
+        (vec![("ByteRange", Object::Ref(by_reference))], "BEEF"),
+        (vec![("Type", Object::Null), ("ByteRange", range.clone())], "CAFE"),
+        (vec![("Type", nowhere.clone()), ("ByteRange", range.clone())], "F00D"),
+        (vec![("Subtype", nowhere), ("ByteRange", range)], "D00D"),
+    ];
+    let mut signatures = Vec::new();
+    for (entries, contents) in forms {
+        let mut sig = pdfcraft_cos::Dict::new();
+        for (key, value) in entries {
+            sig.set(key.as_bytes().to_vec(), value);
+        }
+        let bytes = (0..contents.len()).step_by(2).map(|i| u8::from_str_radix(&contents[i..i + 2], 16).unwrap()).collect();
+        sig.set(b"Contents".to_vec(), Object::String(PdfString { bytes, hex: true }));
+        signatures.push(Object::Ref(doc.add(Object::Dict(sig))));
+    }
+    // Neither of what makes one: a string /Contents alone is anybody's, so it's encrypted.
+    let mut other = pdfcraft_cos::Dict::new();
+    other.set(b"Contents".to_vec(), Object::String(PdfString { bytes: vec![0xAB, 0xCD], hex: true }));
+    signatures.push(Object::Ref(doc.add(Object::Dict(other))));
+    doc.update_dict(doc.root().unwrap(), |c| c.set(b"Test".to_vec(), Object::Array(signatures))).unwrap();
     doc.set_encryption(&NewEncryption {
         algorithm: Algorithm::Aes256,
         user_password: "",
@@ -792,5 +850,169 @@ fn a_signature_dictionary_typed_by_reference_keeps_its_contents() {
     })
     .unwrap();
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
-    assert!(holds(&bytes, "<3082DEAD>"), "written as is");
+    for contents in ["DEAD", "BEEF", "CAFE", "F00D", "D00D"] {
+        assert!(holds(&bytes, &format!("<{contents}>")), "{contents}: written as is");
+    }
+    assert!(!holds(&bytes, "<ABCD>"), "without a /ByteRange it is no signature");
+}
+
+/// What a test needs to write an update of a classic file protected with AES-128.
+struct Classic {
+    bytes: Vec<u8>,
+    root: ObjRef,
+    info: ObjRef,
+    encrypt: ObjRef,
+    id: Vec<u8>,
+    dict: pdfcraft_cos::Dict,
+}
+
+fn classic_file() -> Classic {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes128,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [9; 32],
+    })
+    .unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let doc = Document::open(Arc::new(bytes.clone())).unwrap();
+    let encrypt = doc.trailer().reference(b"Encrypt").unwrap();
+    let id = doc.trailer().get(b"ID").unwrap().as_array().unwrap()[0].as_string().unwrap().bytes.clone();
+    let dict = doc.get(encrypt).as_dict().cloned().unwrap();
+    Classic { root: doc.root().unwrap(), info: doc.trailer().reference(b"Info").unwrap(), bytes, encrypt, id, dict }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02X}")).collect()
+}
+
+/// `bytes` with an update appended: `objects`, and a trailer of `trailer` entries.
+fn updated(bytes: &[u8], objects: &[(u32, String)], trailer: &str) -> Vec<u8> {
+    let at = bytes.windows(9).rposition(|w| w == b"startxref").unwrap();
+    let prev: usize = String::from_utf8_lossy(&bytes[at + 9..]).split_whitespace().next().unwrap().parse().unwrap();
+    let mut out = bytes.to_vec();
+    let mut table = String::from("xref\n");
+    for (num, body) in objects {
+        table.push_str(&format!("{num} 1\n{:010} 00000 n \n", out.len()));
+        out.extend_from_slice(format!("{num} 0 obj\n{body}\nendobj\n").as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(table.as_bytes());
+    out.extend_from_slice(format!("trailer\n<< {trailer} /Size 1000 /Prev {prev} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    out
+}
+
+/// The strings of `/Encrypt` are never encrypted (ISO 32000-2 §7.6.2), and can be objects of their
+/// own. Read as ordinary strings they were decrypted, and a full save encrypted them again under
+/// another number, so the file it wrote no longer opened with its own password.
+#[test]
+fn encrypt_strings_given_by_reference_stay_as_stored() {
+    let file = classic_file();
+    let string = |key: &[u8]| hex(&file.dict.get(key).unwrap().as_string().unwrap().bytes);
+    let replaced = format!(
+        "<< /Filter /Standard /V 4 /R 4 /Length 128 /P {} /O 900 0 R /U 901 0 R /CF << /StdCF << /CFM /AESV2 /Length 16 /AuthEvent /DocOpen >> >> /StmF /StdCF /StrF /StdCF >>",
+        file.dict.int(b"P").unwrap()
+    );
+    let objects = [(file.encrypt.num, replaced), (900, format!("<{}>", string(b"O"))), (901, format!("<{}>", string(b"U")))];
+    let trailer =
+        format!("/Root {} 0 R /Info {} 0 R /Encrypt {} 0 R /ID [<{id}> <{id}>]", file.root.num, file.info.num, file.encrypt.num, id = hex(&file.id));
+    let source = Document::open(Arc::new(updated(&file.bytes, &objects, &trailer))).unwrap();
+    assert_eq!(content(&source), SECRET, "the file reads");
+    assert_eq!(title(&source).as_deref(), Some("Quarterly numbers"));
+    for object_streams in [false, true] {
+        let saved = write_full(&source, &SaveOptions { object_streams, ..SaveOptions::default() }).unwrap();
+        let back = Document::open(Arc::new(saved)).unwrap();
+        assert_eq!(content(&back), SECRET, "object streams: {object_streams}");
+        assert_eq!(title(&back).as_deref(), Some("Quarterly numbers"), "object streams: {object_streams}");
+    }
+}
+
+/// `/ID` has to be direct in an encrypted file, but one that isn't has its key made from the same
+/// bytes, and a full save writes it direct.
+#[test]
+fn a_file_identifier_given_by_reference_is_read() {
+    let file = classic_file();
+    let id = hex(&file.id);
+    let reference = |entries: &str, objects: &[(u32, String)]| {
+        let trailer = format!("/Root {} 0 R /Encrypt {} 0 R /ID {entries}", file.root.num, file.encrypt.num);
+        updated(&file.bytes, objects, &trailer)
+    };
+    let whole = reference("900 0 R", &[(900, format!("[<{id}> <{id}>]"))]);
+    let entries = reference("[900 0 R 901 0 R]", &[(900, format!("<{id}>")), (901, format!("<{id}>"))]);
+    for file in [whole, entries] {
+        let source = Document::open(Arc::new(file)).unwrap();
+        assert_eq!(content(&source), SECRET);
+        let back = Document::open(Arc::new(write_full(&source, &SaveOptions::default()).unwrap())).unwrap();
+        assert_eq!(content(&back), SECRET);
+        assert!(matches!(back.trailer().get(b"ID"), Some(Object::Array(_))), "written direct");
+    }
+}
+
+/// A direct `/Encrypt` can refer to objects. A full save dropped those it found only there, and kept
+/// its references as they were under the old numbers, so nothing in the file read afterwards.
+#[test]
+fn a_direct_encrypt_dictionary_keeps_what_it_refers_to() {
+    for object_streams in [false, true] {
+        let mut doc = Document::open(Arc::new(fixture())).unwrap();
+        doc.set_encryption(&NewEncryption {
+            algorithm: Algorithm::Aes128,
+            user_password: "",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [9; 32],
+        })
+        .unwrap();
+        let mut dict = doc.get(doc.trailer().reference(b"Encrypt").unwrap()).as_dict().cloned().unwrap();
+        let filter = doc.add(Object::name("StdCF"));
+        let filters = doc.add(dict.get(b"CF").unwrap().clone());
+        dict.set(b"StmF".to_vec(), Object::Ref(filter));
+        dict.set(b"CF".to_vec(), Object::Ref(filters));
+        doc.trailer_mut().set(b"Encrypt".to_vec(), Object::Dict(dict));
+        let options = SaveOptions { object_streams, ..SaveOptions::default() };
+        let saved = write_full(&doc, &options).unwrap();
+        let back = Document::open(Arc::new(saved)).unwrap();
+        assert_eq!(content(&back), SECRET, "object streams: {object_streams}");
+        let again = write_full(&back, &options).unwrap();
+        assert_eq!(content(&Document::open(Arc::new(again)).unwrap()), SECRET, "object streams: {object_streams}, saved again");
+    }
+}
+
+/// How a stream is treated can be given by reference, and what that loads can be a stream too. A
+/// file can make a ladder of those, where each rung reads the rung below, then two trees wider than
+/// the object cache, which push that rung out of it, then the rung below again. If what is loaded
+/// for a selector followed its own, each rung would take twice what the one below does.
+#[test]
+fn selectors_that_lead_to_selectors_load_at_once() {
+    let mut doc = Document::open(Arc::new(protect(Algorithm::Aes128, "", "owner", -1))).unwrap();
+    let stream_of = |doc: &mut Document, filters: Vec<Object>| {
+        let mut dict = pdfcraft_cos::Dict::new();
+        dict.set(b"Filter".to_vec(), Object::Array(filters));
+        doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(dict, Vec::new())))
+    };
+    let tree = |doc: &mut Document| {
+        let mut level: Vec<ObjRef> = (0..6_561).map(|i| doc.add(Object::Int(i))).collect();
+        while level.len() > 1 {
+            let chunks: Vec<Vec<Object>> = level.chunks(9).map(|c| c.iter().map(|r| Object::Ref(*r)).collect()).collect();
+            level = chunks.into_iter().map(|c| stream_of(doc, c)).collect();
+        }
+        Object::Ref(level[0])
+    };
+    let (first, second) = (tree(&mut doc), tree(&mut doc));
+    let mut top = doc.add(Object::Int(0));
+    // Twelve rungs of two, and the trees' five levels, stay inside the 32 that loading may nest.
+    for _ in 0..12 {
+        let (a, b) = (stream_of(&mut doc, vec![Object::Ref(top)]), stream_of(&mut doc, vec![Object::Ref(top)]));
+        top = stream_of(&mut doc, vec![Object::Ref(a), first.clone(), second.clone(), Object::Ref(b)]);
+    }
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let doc = Document::open(Arc::new(saved)).unwrap();
+        let _ = done.send(doc.get(top).as_dict().is_some());
+    });
+    assert_eq!(finished.recv_timeout(std::time::Duration::from_secs(20)), Ok(true), "loading must not fan out");
 }

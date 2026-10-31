@@ -1,5 +1,65 @@
 use super::*;
 
+/// An object can be nothing but a reference to another. A chain of them is followed, and one that
+/// goes round ends in what isn't a dictionary or a name, without hanging.
+#[test]
+fn references_to_references_are_followed() {
+    let mut doc = Document::new_empty();
+    let name = doc.add(Object::name("Target"));
+    let one = doc.add(Object::Ref(name));
+    let two = doc.add(Object::Ref(one));
+    assert_eq!(doc.resolve(&Object::Ref(two)).as_name(), Some(b"Target".as_slice()));
+    let a = doc.add(Object::Null);
+    let b = doc.add(Object::Ref(a));
+    doc.set(a, Object::Ref(b));
+    assert_eq!(doc.resolve(&Object::Ref(a)).as_name(), None);
+}
+
+/// An object stream's `/DecodeParms` can be given by reference: without them a predictor isn't
+/// undone, so its members were lost.
+#[test]
+fn an_object_stream_with_parameters_by_reference_is_read() {
+    let members = b"3 0 << /Hidden (yes) >>";
+    // PNG Sub, one row.
+    let mut rows = vec![1u8];
+    let mut before = 0u8;
+    for b in members {
+        rows.push(b.wrapping_sub(before));
+        before = *b;
+    }
+    let coded = pdfcraft_filters::encode_flate(&rows);
+    let mut out = b"%PDF-1.5\n".to_vec();
+    let mut offs = [0usize; 7];
+    let mut obj = |out: &mut Vec<u8>, n: usize, body: &[u8]| {
+        offs[n] = out.len();
+        out.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    };
+    obj(&mut out, 1, b"<< /Type /Catalog /Pages 2 0 R >>");
+    obj(&mut out, 2, b"<< /Type /Pages /Kids [] /Count 0 /Extra 3 0 R >>");
+    let mut stm = format!("<< /Type /ObjStm /N 1 /First 4 /Filter /FlateDecode /DecodeParms 6 0 R /Length {} >>\nstream\n", coded.len()).into_bytes();
+    stm.extend_from_slice(&coded);
+    stm.extend_from_slice(b"\nendstream");
+    obj(&mut out, 4, &stm);
+    let data = [2u8, 0, 4, 0];
+    let mut xs = format!("<< /Type /XRef /Size 7 /W [1 2 1] /Index [3 1] /Length {} >>\nstream\n", data.len()).into_bytes();
+    xs.extend_from_slice(&data);
+    xs.extend_from_slice(b"\nendstream");
+    obj(&mut out, 5, &xs);
+    obj(&mut out, 6, format!("<< /Predictor 11 /Columns {} >>", members.len()).as_bytes());
+    let table = out.len();
+    out.extend_from_slice(b"xref\n0 7\n0000000000 65535 f \n");
+    for (n, off) in offs.iter().enumerate().skip(1) {
+        let line = if n == 3 { "0000000000 65535 f \n".to_string() } else { format!("{off:010} 00000 n \n") };
+        out.extend_from_slice(line.as_bytes());
+    }
+    out.extend_from_slice(format!("trailer << /Size 7 /Root 1 0 R /XRefStm {} >>\nstartxref\n{table}\n%%EOF\n", offs[5]).as_bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    let hidden = doc.get(ObjRef::new(3, 0));
+    assert_eq!(hidden.as_dict().and_then(|d| d.get(b"Hidden")).and_then(Object::as_string).map(|s| s.bytes.clone()), Some(b"yes".to_vec()));
+}
+
 /// Each entry of an `/Encrypt` dictionary, and of a crypt filter in it, reads the same by reference.
 /// Read as absent, `/StmF` or `/CFM` was `/Identity`, so a whole file's streams stayed ciphertext.
 #[test]

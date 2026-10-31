@@ -7283,6 +7283,90 @@ fn content_after_an_inline_image_holding_ei_is_still_read() {
     assert!(page.contains("AFTER"), "the content after the image was lost: {page:?}");
 }
 
+/// A lone filter takes its parameters as a dictionary or as an array of one, and given as an array
+/// of one itself it takes either too. The form of `/Filter` decided which was read, so a predictor
+/// in the other form was lost and the content came out as noise. `/StmF` and `/StrF` are optional,
+/// meaning `/Identity`: such a file didn't open at all, though a stream can still name a filter.
+#[test]
+fn a_filters_parameters_are_read_in_either_form() {
+    use super::*;
+    use pdfcraft_cos::{Algorithm, Dict, Document, NewEncryption, Object, SaveOptions, Stream, write_full, write_incremental};
+    let content = b"1 0 0 rg 0 0 200 200 re f";
+    let centre = |bytes: Vec<u8>| -> [u8; 4] {
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    let page = |stream: &[u8]| {
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n".to_vec();
+        pdf.extend_from_slice(stream);
+        pdf.extend_from_slice(b"\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        pdf
+    };
+    // PNG Sub over one row, which reads as noise if it isn't undone.
+    let mut rows = vec![1u8];
+    let mut before = 0u8;
+    for b in content {
+        rows.push(b.wrapping_sub(before));
+        before = *b;
+    }
+    let coded = Stream::flate(Dict::new(), &rows).raw;
+    let parms = format!("<< /Predictor 11 /Columns {} >>", content.len());
+    for (filter, decode_parms) in [
+        ("/FlateDecode", parms.clone()),
+        ("/FlateDecode", format!("[{parms}]")),
+        ("[/FlateDecode]", parms.clone()),
+        ("[/FlateDecode]", format!("[{parms}]")),
+    ] {
+        let mut stream = format!("4 0 obj << /Filter {filter} /DecodeParms {decode_parms} /Length {} >> stream\n", coded.len()).into_bytes();
+        stream.extend_from_slice(&coded);
+        stream.extend_from_slice(b"\nendstream endobj");
+        assert_eq!(centre(page(&stream)), [255, 0, 0, 255], "{filter} with {decode_parms}");
+    }
+
+    let plain = format!("4 0 obj << /Length {} >> stream\n{}\nendstream endobj", content.len(), String::from_utf8_lossy(content));
+    let mut doc = Document::open(Arc::new(page(plain.as_bytes()))).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes128,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [9; 32],
+    })
+    .unwrap();
+    // No object streams: they would be encrypted under the /StmF about to go.
+    let saved = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let mut doc = Document::open(Arc::new(saved)).unwrap();
+    let encrypt = doc.trailer().reference(b"Encrypt").unwrap();
+    doc.update_dict(encrypt, |e| {
+        e.remove(b"StmF");
+        e.remove(b"StrF");
+    })
+    .unwrap();
+    let mut doc = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let catalog = doc.get(doc.root().unwrap());
+    let pages = doc.get(catalog.as_dict().unwrap().reference(b"Pages").unwrap());
+    let first = doc.resolve(&pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap()[0]);
+    let contents = first.as_dict().unwrap().reference(b"Contents").unwrap();
+    let mut named = Dict::new();
+    named.set(b"Name".to_vec(), Object::name("StdCF"));
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("Crypt"));
+    dict.set(b"DecodeParms".to_vec(), Object::Dict(named));
+    doc.set(contents, Object::Stream(Stream::from_raw(dict, content.to_vec())));
+    assert_eq!(centre(write_incremental(&doc, &SaveOptions::default()).unwrap()), [255, 0, 0, 255], "no /StmF, and a stream naming StdCF");
+}
+
 /// A stream can pick its own crypt filter: `/Crypt` in `/Filter`, with the filter's name in
 /// `/DecodeParms`, or `/Identity` without one (ISO 32000-2 §7.4.10). The renderer used the
 /// document's filter for every stream, and then couldn't decode `/Crypt`, so the page stayed blank.
@@ -7349,6 +7433,10 @@ fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
                 let mut stored = Dict::new();
                 stored.set(b"CFM".to_vec(), Object::name("None"));
                 cf.set(b"Stored".to_vec(), Object::Dict(stored));
+                // `/Identity` is never one of these, whatever a file says.
+                let mut named = Dict::new();
+                named.set(b"CFM".to_vec(), Object::name("AESV2"));
+                cf.set(b"Identity".to_vec(), Object::Dict(named));
                 e.set(b"CF".to_vec(), Object::Dict(cf));
             })
             .unwrap();
@@ -7365,6 +7453,13 @@ fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
             "an entry of /DecodeParms by reference",
             "/Name by reference",
             "before another filter",
+            "a lone dictionary for an array of one",
+            "an array of one for a name",
+            "a dictionary by reference for an array of one",
+            "an array of one by reference for a dictionary",
+            "a name by reference for an array",
+            "a lone dictionary before another filter",
+            "past the longest chain",
         ];
         for what in spellings {
             let mut doc = Document::open(Arc::new(protected.clone())).unwrap();
@@ -7384,6 +7479,19 @@ fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
                     parms.set(b"Name".to_vec(), Object::Ref(doc.add(Object::name("StdCF"))));
                     (crypt(), Some(Object::Dict(parms)))
                 }
+                "a lone dictionary for an array of one" => (Object::Array(vec![crypt()]), Some(name("StdCF"))),
+                "an array of one for a name" => (crypt(), Some(Object::Array(vec![name("StdCF")]))),
+                "a dictionary by reference for an array of one" => (Object::Array(vec![crypt()]), Some(Object::Ref(doc.add(name("StdCF"))))),
+                "an array of one by reference for a dictionary" => (Object::Ref(doc.add(Object::Array(vec![crypt()]))), Some(name("StdCF"))),
+                "a name by reference for an array" => (Object::Ref(doc.add(crypt())), Some(Object::Array(vec![name("StdCF")]))),
+                "a lone dictionary before another filter" => (Object::Array(vec![crypt(), Object::name("ASCIIHexDecode")]), Some(name("StdCF"))),
+                // One filter more than cos decodes: it names none there, so here neither, and the
+                // stream is read with the document's filter, not the `Stored` it says.
+                "past the longest chain" => {
+                    let mut chain = vec![crypt()];
+                    chain.extend(std::iter::repeat_n(Object::name("ASCIIHexDecode"), 9));
+                    (Object::Array(chain), Some(Object::Array(vec![name("Stored")])))
+                }
                 _ => (Object::Array(vec![crypt(), Object::name("ASCIIHexDecode")]), Some(Object::Array(vec![name("StdCF"), Object::Null]))),
             };
             let contents = contents_of(&doc);
@@ -7393,7 +7501,15 @@ fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
             if let Some(parms) = parms {
                 dict.set(b"DecodeParms".to_vec(), parms);
             }
-            let raw = if what.ends_with("another filter") { hex.clone().into_bytes() } else { content.as_bytes().to_vec() };
+            let raw = match what {
+                "before another filter" | "a lone dictionary before another filter" => hex.clone().into_bytes(),
+                "past the longest chain" => (0..9).fold(content.as_bytes().to_vec(), |data, _| {
+                    let mut coded: Vec<u8> = data.iter().flat_map(|b| format!("{b:02X}").into_bytes()).collect();
+                    coded.push(b'>');
+                    coded
+                }),
+                _ => content.as_bytes().to_vec(),
+            };
             doc.set(contents, Object::Stream(Stream::from_raw(dict, raw)));
             let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
             assert_eq!(centre(saved), [255, 0, 0, 255], "{algorithm:?}: {what}");

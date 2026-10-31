@@ -7,10 +7,49 @@
 //! false. Streams naming a crypt filter (`/Crypt` in `/Filter`) use that filter; embedded files
 //! use `/EFF`.
 
+use std::cell::Cell;
+
 use pdfcraft_crypt::{EncryptDict, Method, SecurityHandler, StreamKind};
 use pdfcraft_filters::MAX_CHAIN;
 
+use crate::document::Held;
 use crate::{Dict, Document, Object, PdfString, Stream};
+
+std::thread_local! {
+    /// Whether this thread is inside [`following`].
+    static FOLLOWING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Clears [`FOLLOWING`], whatever happens while it is set.
+struct Following;
+
+impl Drop for Following {
+    fn drop(&mut self) {
+        FOLLOWING.set(false);
+    }
+}
+
+/// What `f` gives, or `nested` if this is inside another `following`. Loading an object can read
+/// what its dictionary gives by reference, and what that loads could do the same: a file could
+/// make one load a tree of them, each object read again once the cache has let it go. So what is
+/// loaded for this doesn't follow its own. These entries are names, arrays of them and small
+/// dictionaries, which have none, so nothing a real file holds is lost.
+pub(crate) fn following<T>(nested: T, f: impl FnOnce() -> T) -> T {
+    if FOLLOWING.replace(true) {
+        return nested;
+    }
+    let _following = Following;
+    f()
+}
+
+/// `o`, or the object it refers to, for what decides how a stream or dictionary is treated. Inside
+/// [`following`] a reference reads as absent.
+fn followed<'o>(doc: &Document, o: &'o Object) -> Held<'o> {
+    match o {
+        Object::Ref(_) => following(Held::Direct(&Object::Null), || doc.held(o)),
+        o => Held::Direct(o),
+    }
+}
 
 fn bytes_of(doc: &Document, d: &Dict, key: &[u8]) -> Vec<u8> {
     d.get(key).map(|v| doc.resolve(v)).and_then(|v| v.as_string().map(|s| s.bytes.clone())).unwrap_or_default()
@@ -72,26 +111,26 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
 
 /// Whether `f`, an entry of a `/Filter` chain or its only filter, is `/Crypt`.
 fn is_crypt(doc: &Document, f: &Object) -> bool {
-    doc.held(f).as_name() == Some(b"Crypt")
+    followed(doc, f).as_name() == Some(b"Crypt")
 }
 
 /// The crypt filter a stream names in its `/Filter` chain (`/Crypt` + `/DecodeParms /Name`), each
 /// given directly or by reference, in an array or not. A chain longer than any decoder takes names
 /// none: nothing can read that stream anyway, and every stream of a file can share one long array.
 fn named_crypt_filter(doc: &Document, dict: &Dict) -> Option<Vec<u8>> {
-    let filter = doc.held(dict.get(b"Filter")?);
+    let filter = followed(doc, dict.get(b"Filter")?);
     let i = match &*filter {
         Object::Array(a) if a.len() <= MAX_CHAIN + 1 => a.iter().position(|f| is_crypt(doc, f))?,
         f if is_crypt(doc, f) => 0,
         _ => return None,
     };
-    let parms = dict.get(b"DecodeParms").map(|p| doc.held(p));
+    let parms = dict.get(b"DecodeParms").map(|p| followed(doc, p));
     let entry = match parms.as_deref() {
-        Some(Object::Array(a)) => a.get(i).map(|p| doc.held(p)),
-        Some(p) if i == 0 => Some(doc.held(p)),
+        Some(Object::Array(a)) => a.get(i).map(|p| followed(doc, p)),
+        Some(p) if i == 0 => Some(Held::Direct(p)),
         _ => None,
     };
-    let name = entry.as_deref().and_then(Object::as_dict).and_then(|p| p.get(b"Name")).map(|n| doc.held(n));
+    let name = entry.as_deref().and_then(Object::as_dict).and_then(|p| p.get(b"Name")).map(|n| followed(doc, n));
     Some(name.as_deref().and_then(Object::as_name).map_or_else(|| b"Identity".to_vec(), <[u8]>::to_vec))
 }
 
@@ -103,40 +142,41 @@ fn named_crypt_filter(doc: &Document, dict: &Dict) -> Option<Vec<u8>> {
 /// has no `/Subtype`; a dictionary with one (an annotation, whose `/Contents` is the comment
 /// text) or with another `/Type` is never exempt, whatever else it carries.
 fn is_signature_dict(doc: &Document, d: &Dict) -> bool {
-    if d.get(b"Subtype").is_some() {
+    // A null entry, or one that refers to nothing, is an absent one (ISO 32000-2 §7.3.7, §7.3.10).
+    let entry = |key: &[u8]| d.get(key).map(|v| followed(doc, v)).filter(|v| !matches!(**v, Object::Null));
+    if entry(b"Subtype").is_some() {
         return false;
     }
-    match d.get(b"Type") {
-        Some(t) => matches!(doc.held(t).as_name(), Some(b"Sig" | b"DocTimeStamp")),
-        None => matches!(d.get(b"Contents"), Some(Object::String(_))) && matches!(d.get(b"ByteRange"), Some(Object::Array(_))),
+    match entry(b"Type") {
+        Some(t) => matches!(t.as_name(), Some(b"Sig" | b"DocTimeStamp")),
+        None => matches!(d.get(b"Contents"), Some(Object::String(_))) && matches!(entry(b"ByteRange").as_deref(), Some(Object::Array(_))),
     }
 }
 
-/// `source` without the `/Crypt` entry of its filter chain and that entry's decode parameters, the
-/// two made direct if they were given by reference. Called on a dictionary [`named_crypt_filter`]
-/// found a filter in, so the chain is short, and no more parameters are copied than it has filters.
+/// `source` without the `/Crypt` entries of its filter chain and their decode parameters, the two
+/// made direct if they were given by reference. Called on a dictionary [`named_crypt_filter`] found
+/// a filter in, so the chain is short, and no more parameters are copied than it has filters.
 fn drop_crypt_filter(doc: &Document, source: &Dict) -> Dict {
     let mut dict = source.clone();
-    let filter = source.get(b"Filter").map(|f| doc.held(f));
-    let mut filters = match filter.as_deref() {
+    let filter = source.get(b"Filter").map(|f| followed(doc, f));
+    let chain = match filter.as_deref() {
         Some(Object::Array(a)) => a.clone(),
         Some(f) => vec![f.clone()],
         None => Vec::new(),
     };
-    let Some(i) = filters.iter().position(|f| is_crypt(doc, f)) else { return dict };
+    let crypt: Vec<bool> = chain.iter().map(|f| is_crypt(doc, f)).collect();
     // A lone parameter dictionary belongs to the first filter (as `named_crypt_filter` reads it).
-    match source.get(b"DecodeParms").map(|p| doc.held(p)).as_deref() {
-        Some(Object::Array(p)) if i < p.len() => {
-            let mut parms: Vec<Object> = p.iter().take(filters.len()).cloned().collect();
-            parms.remove(i);
+    match source.get(b"DecodeParms").map(|p| followed(doc, p)).as_deref() {
+        Some(Object::Array(p)) => {
+            let parms: Vec<Object> = p.iter().zip(&crypt).filter(|(_, c)| !**c).map(|(p, _)| p.clone()).collect();
             dict.set(b"DecodeParms".to_vec(), Object::Array(parms));
         }
-        Some(Object::Dict(_)) if i == 0 => {
+        Some(Object::Dict(_)) if crypt.first() == Some(&true) => {
             dict.remove(b"DecodeParms");
         }
         _ => {}
     }
-    filters.remove(i);
+    let filters: Vec<Object> = chain.into_iter().zip(&crypt).filter(|(_, c)| !**c).map(|(f, _)| f).collect();
     if filters.is_empty() {
         dict.remove(b"Filter");
         if matches!(dict.get(b"DecodeParms"), Some(Object::Array(p)) if p.is_empty()) {
@@ -191,7 +231,7 @@ fn walk(doc: &Document, o: &Object, strings: &dyn Fn(&PdfString) -> PdfString, h
         Object::Dict(d) => Object::Dict(d.iter().map(|(k, v)| (k.clone(), walk(doc, v, strings, h, num, generation, pass))).collect()),
         Object::Stream(s) => {
             let walked = |d: &Dict| -> Dict { d.iter().map(|(k, v)| (k.clone(), walk(doc, v, strings, h, num, generation, pass))).collect() };
-            let ty = s.dict.get(b"Type").map(|t| doc.held(t));
+            let ty = s.dict.get(b"Type").map(|t| followed(doc, t));
             let ty = ty.as_deref().and_then(Object::as_name);
             // Cross-reference streams are never encrypted (§7.5.8), but only reading may trust the
             // label: a stream a producer calls /XRef stays plaintext if writing believes it, and the

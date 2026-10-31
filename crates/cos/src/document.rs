@@ -19,6 +19,7 @@ mod reader;
 mod state;
 mod xref;
 
+pub(crate) use objects::Held;
 #[cfg(test)]
 pub(crate) use reader::find;
 #[cfg(test)]
@@ -59,6 +60,8 @@ pub struct Document {
     security: Option<Arc<pdfcraft_crypt::SecurityHandler>>,
     /// Object number of the `/Encrypt` dictionary (never encrypted itself).
     encrypt_num: Option<u32>,
+    /// What that dictionary and `/ID` refer to, which the key comes from, and so is as stored.
+    encrypt_members: Arc<HashSet<u32>>,
     /// Encryption was added, changed or removed since opening: only a full save can apply it.
     encryption_changed: bool,
     /// Set by edits that must not leave earlier revisions in the file (redaction).

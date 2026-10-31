@@ -150,12 +150,16 @@ impl Document {
         self.try_get(r.num).unwrap_or_else(|_| Arc::new(Object::Null))
     }
 
-    /// Follow a reference if `o` is one; otherwise return `o` itself.
+    /// Follow a reference if `o` is one; otherwise return `o` itself. An object can be nothing but
+    /// a reference to another, which is followed too, up to [`MAX_REFERENCE_HOPS`] of them.
     pub fn resolve(&self, o: &Object) -> Arc<Object> {
-        match o {
-            Object::Ref(r) => self.get(*r),
-            other => Arc::new(other.clone()),
+        let Object::Ref(r) = o else { return Arc::new(o.clone()) };
+        let mut held = self.get(*r);
+        for _ in 0..MAX_REFERENCE_HOPS {
+            let Object::Ref(r) = &*held else { break };
+            held = self.get(*r);
         }
+        held
     }
 
     /// `s` with the `/DecodeParms` its filters use made direct, so [`Stream::decoded`] reads them:
@@ -503,7 +507,9 @@ impl Document {
         let Object::Stream(s) = &*loaded else { return Err(CosError::MissingObject(num)) };
         let n = s.dict.int(b"N").unwrap_or(0).clamp(0, 1_000_000) as usize;
         let first = usize::try_from(s.dict.int(b"First").unwrap_or(0).max(0)).ok();
-        let data = s.decoded_within(self.stream_limit)?;
+        // Its parameters can be given by reference, and can sit in another object stream.
+        let readable = crate::security::following(Cow::Borrowed(s), || self.with_direct_parms(s));
+        let data = readable.decoded_within(self.stream_limit)?;
         let mut lx = Lexer::new(&data, 0);
         let mut index = Vec::with_capacity(n);
         for _ in 0..n {
@@ -726,6 +732,10 @@ const DECODE_PARMS_KEYS: [&[u8]; 13] = [
     b"DamagedRowsBeforeError",
     b"ColorTransform",
 ];
+
+/// How many references in a row [`Document::resolve`] follows: enough for any file, and it ends a
+/// cycle of them.
+const MAX_REFERENCE_HOPS: usize = 32;
 
 /// An object read in place, or the object a reference names as the document holds it: either way
 /// nothing is copied ([`Document::held`]).

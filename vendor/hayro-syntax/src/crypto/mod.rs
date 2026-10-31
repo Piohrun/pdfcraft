@@ -318,12 +318,18 @@ impl DecryptorData {
             }
         }
 
-        let stm_f = *mappings
-            .get(dict.get::<Name<'_>>(STM_F)?.as_str())
-            .unwrap_or(&CryptDictionary::identity(default_length));
-        let str_f = *mappings
-            .get(dict.get::<Name<'_>>(STR_F)?.as_str())
-            .unwrap_or(&CryptDictionary::identity(default_length));
+        // PdfCraft patch (30): `/Identity` is never an entry of `/CF`, whatever a file puts there,
+        // and `/StmF` and `/StrF` are optional, naming it by default (ISO 32000-2 Table 20).
+        mappings.remove("Identity");
+        let identity = CryptDictionary::identity(default_length);
+        let stm_f = dict
+            .get::<Name<'_>>(STM_F)
+            .and_then(|n| mappings.get(n.as_str()).copied())
+            .unwrap_or(identity);
+        let str_f = dict
+            .get::<Name<'_>>(STR_F)
+            .and_then(|n| mappings.get(n.as_str()).copied())
+            .unwrap_or(identity);
 
         Some(Self {
             stream_filter: stm_f,
