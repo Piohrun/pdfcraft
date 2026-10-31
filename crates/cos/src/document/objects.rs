@@ -212,7 +212,7 @@ impl Document {
     }
 
     /// `o`, or the object it refers to, without copying either.
-    fn held<'o>(&self, o: &'o Object) -> Held<'o> {
+    pub(crate) fn held<'o>(&self, o: &'o Object) -> Held<'o> {
         match o {
             Object::Ref(_) => Held::Resolved(self.resolve(o)),
             o => Held::Direct(o),
@@ -729,7 +729,7 @@ const DECODE_PARMS_KEYS: [&[u8]; 13] = [
 
 /// An object read in place, or the object a reference names as the document holds it: either way
 /// nothing is copied ([`Document::held`]).
-enum Held<'o> {
+pub(crate) enum Held<'o> {
     Direct(&'o Object),
     Resolved(Arc<Object>),
 }

@@ -133,11 +133,12 @@ fn write_stream(s: &Stream, out: &mut Vec<u8>) {
 
 /// The object as written: encrypted with its (output) number when the document is encrypted,
 /// except the `/Encrypt` dictionary itself (`source_num` is its number in the source document).
+/// `o` has the document's numbers in its references ([`crate::security::transform`]).
 fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &'a Object) -> Cow<'a, Object> {
     match doc.output_security() {
         (Some(h), encrypt_num) if Some(source_num) != encrypt_num => {
             let pass = if doc.encryption_changed() { crate::security::Pass::EncryptReplacing } else { crate::security::Pass::Encrypt };
-            Cow::Owned(crate::security::transform(h, o, num, generation, pass))
+            Cow::Owned(crate::security::transform(doc, h, o, num, generation, pass))
         }
         _ => Cow::Borrowed(o),
     }
@@ -336,9 +337,10 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         if in_stream {
             packed.push((num, *r));
         } else {
-            let o = renumber(&*reread(&mut reader, *r, *is_stream)?, &map);
+            let o = reread(&mut reader, *r, *is_stream)?;
+            let o = renumber(&prepared(&reader.document, r.num, num, 0, &o), &map);
             rows.insert(num, Row::InFile(out.len() as u64, 0));
-            write_indirect(num, 0, &prepared(&reader.document, r.num, num, 0, &o), &mut out);
+            write_indirect(num, 0, &o, &mut out);
         }
     }
     // Object streams take the numbers after the last object. Their contents are not encrypted

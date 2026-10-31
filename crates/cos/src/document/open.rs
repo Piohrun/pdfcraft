@@ -336,7 +336,9 @@ impl Document {
     /// Decrypt a freshly parsed indirect object if the document is encrypted.
     pub(super) fn decrypted(&self, id: ObjRef, o: Object) -> Object {
         match &self.security {
-            Some(h) if Some(id.num) != self.encrypt_num => crate::security::transform(h, &o, id.num, id.generation, crate::security::Pass::Decrypt),
+            Some(h) if Some(id.num) != self.encrypt_num => {
+                crate::security::transform(self, h, &o, id.num, id.generation, crate::security::Pass::Decrypt)
+            }
             _ => o,
         }
     }

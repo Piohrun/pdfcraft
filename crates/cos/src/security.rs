@@ -8,6 +8,7 @@
 //! use `/EFF`.
 
 use pdfcraft_crypt::{EncryptDict, Method, SecurityHandler, StreamKind};
+use pdfcraft_filters::MAX_CHAIN;
 
 use crate::{Dict, Document, Object, PdfString, Stream};
 
@@ -18,12 +19,12 @@ fn bytes_of(doc: &Document, d: &Dict, key: &[u8]) -> Vec<u8> {
 /// Read the handler parameters from an `/Encrypt` dictionary.
 pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
     let int = |k: &[u8], default: i64| d.get(k).map(|v| doc.resolve(v)).and_then(|v| v.as_int()).unwrap_or(default);
-    let name = |k: &[u8]| d.get(k).and_then(|v| v.as_name()).map(|n| n.to_vec()).unwrap_or_else(|| b"Identity".to_vec());
+    let name = |d: &Dict, k: &[u8]| d.get(k).and_then(|v| doc.resolve(v).as_name().map(<[u8]>::to_vec));
     let mut crypt_filters = Vec::new();
     if let Some(cf) = d.get(b"CF").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()) {
         for (k, v) in cf.iter() {
             let Some(f) = doc.resolve(v).as_dict().cloned() else { continue };
-            let method = match f.name(b"CFM") {
+            let method = match name(&f, b"CFM").as_deref() {
                 Some(b"V2") => Method::Rc4,
                 Some(b"AESV2") => Method::Aes128,
                 Some(b"AESV3") => Method::Aes256,
@@ -40,7 +41,8 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
         .get(b"CF")
         .map(|c| doc.resolve(c))
         .and_then(|c| c.as_dict().and_then(|c| c.get(b"StdCF").map(|f| doc.resolve(f))))
-        .and_then(|f| f.as_dict().and_then(|f| f.int(b"Length")))
+        .and_then(|f| f.as_dict().and_then(|f| f.get(b"Length").map(|n| doc.resolve(n))))
+        .and_then(|n| n.as_int())
         .filter(|n| *n > 0);
     let length_bits = match (v, cf_len) {
         (5.., _) => 256,
@@ -50,7 +52,7 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
         _ => int(b"Length", 40),
     };
     EncryptDict {
-        filter: d.name(b"Filter").map(|n| n.to_vec()).unwrap_or_default(),
+        filter: name(d, b"Filter").unwrap_or_default(),
         v,
         r: int(b"R", 0),
         length_bits,
@@ -60,28 +62,37 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
         ue: bytes_of(doc, d, b"UE"),
         perms: bytes_of(doc, d, b"Perms"),
         p: int(b"P", -1) as i32,
-        encrypt_metadata: !matches!(d.get(b"EncryptMetadata"), Some(Object::Bool(false))),
+        encrypt_metadata: !matches!(d.get(b"EncryptMetadata").map(|v| doc.resolve(v)).as_deref(), Some(Object::Bool(false))),
         crypt_filters,
-        stm_f: name(b"StmF"),
-        str_f: name(b"StrF"),
-        ef_f: d.get(b"EFF").and_then(|v| v.as_name()).map(|n| n.to_vec()).unwrap_or_default(),
+        stm_f: name(d, b"StmF").unwrap_or_else(|| b"Identity".to_vec()),
+        str_f: name(d, b"StrF").unwrap_or_else(|| b"Identity".to_vec()),
+        ef_f: name(d, b"EFF").unwrap_or_default(),
     }
 }
 
-/// The crypt filter a stream names in its `/Filter` chain (`/Crypt` + `/DecodeParms /Name`).
-fn named_crypt_filter(dict: &Dict) -> Option<Vec<u8>> {
-    let names: Vec<&[u8]> = match dict.get(b"Filter") {
-        Some(Object::Name(n)) => vec![n],
-        Some(Object::Array(a)) => a.iter().filter_map(Object::as_name).collect(),
+/// Whether `f`, an entry of a `/Filter` chain or its only filter, is `/Crypt`.
+fn is_crypt(doc: &Document, f: &Object) -> bool {
+    doc.held(f).as_name() == Some(b"Crypt")
+}
+
+/// The crypt filter a stream names in its `/Filter` chain (`/Crypt` + `/DecodeParms /Name`), each
+/// given directly or by reference, in an array or not. A chain longer than any decoder takes names
+/// none: nothing can read that stream anyway, and every stream of a file can share one long array.
+fn named_crypt_filter(doc: &Document, dict: &Dict) -> Option<Vec<u8>> {
+    let filter = doc.held(dict.get(b"Filter")?);
+    let i = match &*filter {
+        Object::Array(a) if a.len() <= MAX_CHAIN + 1 => a.iter().position(|f| is_crypt(doc, f))?,
+        f if is_crypt(doc, f) => 0,
         _ => return None,
     };
-    let i = names.iter().position(|n| *n == b"Crypt")?;
-    let parms = match dict.get(b"DecodeParms") {
-        Some(Object::Dict(d)) if i == 0 => Some(d.clone()),
-        Some(Object::Array(a)) => a.get(i).and_then(|p| p.as_dict().cloned()),
+    let parms = dict.get(b"DecodeParms").map(|p| doc.held(p));
+    let entry = match parms.as_deref() {
+        Some(Object::Array(a)) => a.get(i).map(|p| doc.held(p)),
+        Some(p) if i == 0 => Some(doc.held(p)),
         _ => None,
     };
-    Some(parms.and_then(|p| p.name(b"Name").map(|n| n.to_vec())).unwrap_or_else(|| b"Identity".to_vec()))
+    let name = entry.as_deref().and_then(Object::as_dict).and_then(|p| p.get(b"Name")).map(|n| doc.held(n));
+    Some(name.as_deref().and_then(Object::as_name).map_or_else(|| b"Identity".to_vec(), <[u8]>::to_vec))
 }
 
 /// A signature dictionary (field signature, document timestamp or usage-rights signature),
@@ -91,34 +102,32 @@ fn named_crypt_filter(dict: &Dict) -> Option<Vec<u8>> {
 /// `/Contents` alongside an array `/ByteRange` (`/Type` is optional). A signature dictionary
 /// has no `/Subtype`; a dictionary with one (an annotation, whose `/Contents` is the comment
 /// text) or with another `/Type` is never exempt, whatever else it carries.
-fn is_signature_dict(d: &Dict) -> bool {
+fn is_signature_dict(doc: &Document, d: &Dict) -> bool {
     if d.get(b"Subtype").is_some() {
         return false;
     }
     match d.get(b"Type") {
-        Some(_) => matches!(d.name(b"Type"), Some(b"Sig" | b"DocTimeStamp")),
+        Some(t) => matches!(doc.held(t).as_name(), Some(b"Sig" | b"DocTimeStamp")),
         None => matches!(d.get(b"Contents"), Some(Object::String(_))) && matches!(d.get(b"ByteRange"), Some(Object::Array(_))),
     }
 }
 
-/// Remove the `/Crypt` entry from a stream's filter chain, with its decode parameters.
-fn drop_crypt_filter(dict: &mut Dict) {
-    let i = match dict.get(b"Filter") {
-        Some(Object::Array(a)) => a.iter().position(|n| n.as_name() == Some(b"Crypt")),
-        Some(Object::Name(n)) if n.as_slice() == b"Crypt" => Some(0),
-        _ => None,
-    };
-    let Some(i) = i else { return };
-    let mut filters = match dict.get(b"Filter") {
+/// `source` without the `/Crypt` entry of its filter chain and that entry's decode parameters, the
+/// two made direct if they were given by reference. Called on a dictionary [`named_crypt_filter`]
+/// found a filter in, so the chain is short, and no more parameters are copied than it has filters.
+fn drop_crypt_filter(doc: &Document, source: &Dict) -> Dict {
+    let mut dict = source.clone();
+    let filter = source.get(b"Filter").map(|f| doc.held(f));
+    let mut filters = match filter.as_deref() {
         Some(Object::Array(a)) => a.clone(),
-        _ => Vec::new(),
+        Some(f) => vec![f.clone()],
+        None => Vec::new(),
     };
-    if i < filters.len() {
-        filters.remove(i);
-    }
+    let Some(i) = filters.iter().position(|f| is_crypt(doc, f)) else { return dict };
     // A lone parameter dictionary belongs to the first filter (as `named_crypt_filter` reads it).
-    match dict.get(b"DecodeParms").cloned() {
-        Some(Object::Array(mut parms)) if i < parms.len() => {
+    match source.get(b"DecodeParms").map(|p| doc.held(p)).as_deref() {
+        Some(Object::Array(p)) if i < p.len() => {
+            let mut parms: Vec<Object> = p.iter().take(filters.len()).cloned().collect();
             parms.remove(i);
             dict.set(b"DecodeParms".to_vec(), Object::Array(parms));
         }
@@ -127,6 +136,7 @@ fn drop_crypt_filter(dict: &mut Dict) {
         }
         _ => {}
     }
+    filters.remove(i);
     if filters.is_empty() {
         dict.remove(b"Filter");
         if matches!(dict.get(b"DecodeParms"), Some(Object::Array(p)) if p.is_empty()) {
@@ -135,6 +145,7 @@ fn drop_crypt_filter(dict: &mut Dict) {
     } else {
         dict.set(b"Filter".to_vec(), Object::Array(filters));
     }
+    dict
 }
 
 /// What [`transform`] does to an object.
@@ -152,43 +163,50 @@ pub(crate) enum Pass {
 
 /// Decrypt or encrypt every string and stream in an indirect object, except a signature
 /// dictionary's `/Contents` (see [`is_signature_dict`]).
-pub(crate) fn transform(h: &SecurityHandler, o: &Object, num: u32, generation: u16, pass: Pass) -> Object {
+///
+/// `o` is as `doc` holds it: what a stream's dictionary gives by reference is read from `doc`, so
+/// its references have to be the document's, not a save's renumbered ones.
+pub(crate) fn transform(doc: &Document, h: &SecurityHandler, o: &Object, num: u32, generation: u16, pass: Pass) -> Object {
     let decrypt = pass == Pass::Decrypt;
     let strings = |s: &PdfString| {
         let bytes = if decrypt { h.decrypt_string(num, generation, &s.bytes) } else { h.encrypt_string(num, generation, &s.bytes) };
         PdfString { bytes, hex: s.hex || !decrypt }
     };
-    walk(o, &strings, h, num, generation, pass)
+    walk(doc, o, &strings, h, num, generation, pass)
 }
 
-fn walk(o: &Object, strings: &dyn Fn(&PdfString) -> PdfString, h: &SecurityHandler, num: u32, generation: u16, pass: Pass) -> Object {
+fn walk(doc: &Document, o: &Object, strings: &dyn Fn(&PdfString) -> PdfString, h: &SecurityHandler, num: u32, generation: u16, pass: Pass) -> Object {
     let decrypt = pass == Pass::Decrypt;
     match o {
         Object::String(s) => Object::String(strings(s)),
-        Object::Array(a) => Object::Array(a.iter().map(|x| walk(x, strings, h, num, generation, pass)).collect()),
-        Object::Dict(d) if is_signature_dict(d) => Object::Dict(
+        Object::Array(a) => Object::Array(a.iter().map(|x| walk(doc, x, strings, h, num, generation, pass)).collect()),
+        Object::Dict(d) if is_signature_dict(doc, d) => Object::Dict(
             d.iter()
                 .map(|(k, v)| match (k.as_slice(), v) {
                     (b"Contents", Object::String(_)) => (k.clone(), v.clone()),
-                    _ => (k.clone(), walk(v, strings, h, num, generation, pass)),
+                    _ => (k.clone(), walk(doc, v, strings, h, num, generation, pass)),
                 })
                 .collect(),
         ),
-        Object::Dict(d) => Object::Dict(d.iter().map(|(k, v)| (k.clone(), walk(v, strings, h, num, generation, pass))).collect()),
+        Object::Dict(d) => Object::Dict(d.iter().map(|(k, v)| (k.clone(), walk(doc, v, strings, h, num, generation, pass))).collect()),
         Object::Stream(s) => {
-            let mut dict: Dict = s.dict.iter().map(|(k, v)| (k.clone(), walk(v, strings, h, num, generation, pass))).collect();
-            let ty = s.dict.name(b"Type");
+            let walked = |d: &Dict| -> Dict { d.iter().map(|(k, v)| (k.clone(), walk(doc, v, strings, h, num, generation, pass))).collect() };
+            let ty = s.dict.get(b"Type").map(|t| doc.held(t));
+            let ty = ty.as_deref().and_then(Object::as_name);
             // Cross-reference streams are never encrypted (§7.5.8), but only reading may trust the
             // label: a stream a producer calls /XRef stays plaintext if writing believes it, and the
             // writer builds its own cross-reference streams outside this transform.
             if (decrypt && ty == Some(b"XRef")) || (ty == Some(b"Metadata") && !h.encrypts_metadata()) {
-                return Object::Stream(Stream { dict, raw: s.raw.clone() });
+                return Object::Stream(Stream { dict: walked(&s.dict), raw: s.raw.clone() });
             }
-            let mut named = named_crypt_filter(&s.dict);
-            if pass == Pass::EncryptReplacing && named.as_deref().is_some_and(|n| !h.dict().crypt_filters.iter().any(|(f, _)| f == n)) {
-                drop_crypt_filter(&mut dict);
+            let mut named = named_crypt_filter(doc, &s.dict);
+            // Before the walk: what it copies out of a reference has strings to encrypt as well.
+            let foreign = pass == Pass::EncryptReplacing && named.as_deref().is_some_and(|n| !h.dict().crypt_filters.iter().any(|(f, _)| f == n));
+            let dropped = foreign.then(|| drop_crypt_filter(doc, &s.dict));
+            if dropped.is_some() {
                 named = None;
             }
+            let dict = walked(dropped.as_ref().unwrap_or(&s.dict));
             let kind = match (&named, ty) {
                 (Some(n), _) => StreamKind::Named(n),
                 (None, Some(b"EmbeddedFile")) => StreamKind::EmbeddedFile,

@@ -1,5 +1,59 @@
 use super::*;
 
+/// Each entry of an `/Encrypt` dictionary, and of a crypt filter in it, reads the same by reference.
+/// Read as absent, `/StmF` or `/CFM` was `/Identity`, so a whole file's streams stayed ciphertext.
+#[test]
+fn encrypt_dictionary_entries_read_the_same_by_reference() {
+    let string = |s: &str| Object::String(crate::PdfString::text(s));
+    let mut filter = Dict::new();
+    filter.set(b"CFM".to_vec(), Object::name("AESV2"));
+    filter.set(b"Length".to_vec(), Object::Int(5));
+    let cf = |filter: Dict| {
+        let mut cf = Dict::new();
+        cf.set(b"StdCF".to_vec(), Object::Dict(filter));
+        cf.set(b"Other".to_vec(), Object::Dict(Dict::new()));
+        Object::Dict(cf)
+    };
+    let mut d = Dict::new();
+    let entries = [
+        ("Filter", Object::name("Standard")),
+        ("V", Object::Int(4)),
+        ("R", Object::Int(4)),
+        ("Length", Object::Int(128)),
+        ("P", Object::Int(-44)),
+        ("O", string("owner")),
+        ("U", string("user")),
+        ("EncryptMetadata", Object::Bool(false)),
+        ("CF", cf(filter.clone())),
+        ("StmF", Object::name("StdCF")),
+        ("StrF", Object::name("Other")),
+        ("EFF", Object::name("StdCF")),
+    ];
+    for (key, value) in &entries {
+        d.set(key.as_bytes().to_vec(), value.clone());
+    }
+    let mut doc = Document::new_empty();
+    let direct = crate::security::encrypt_dict(&doc, &d);
+    assert_eq!((direct.stm_f.as_slice(), direct.str_f.as_slice(), direct.ef_f.as_slice()), (&b"StdCF"[..], &b"Other"[..], &b"StdCF"[..]));
+    assert_eq!(direct.length_bits, 40, "the filter's own length, in bytes");
+    assert!(!direct.encrypt_metadata);
+    assert_eq!(direct.crypt_filters.iter().filter(|(_, m)| *m == pdfcraft_crypt::Method::Aes128).count(), 1);
+    for (key, value) in &entries {
+        let mut one = d.clone();
+        let r = doc.add(value.clone());
+        one.set(key.as_bytes().to_vec(), Object::Ref(r));
+        assert_eq!(crate::security::encrypt_dict(&doc, &one), direct, "/{key}");
+    }
+    for key in ["CFM", "Length"] {
+        let mut by_reference = filter.clone();
+        let r = doc.add(filter.get(key.as_bytes()).unwrap().clone());
+        by_reference.set(key.as_bytes().to_vec(), Object::Ref(r));
+        let mut one = d.clone();
+        one.set(b"CF".to_vec(), cf(by_reference));
+        assert_eq!(crate::security::encrypt_dict(&doc, &one), direct, "/{key} in the filter");
+    }
+}
+
 /// /DecodeParms given by reference, whole, as array entries or as the numbers inside, are read
 /// once made direct: here a Flate predictor, which the stream alone doesn't see. Only the entries the filters use are
 /// resolved, and nothing is for a chain longer than a decoder takes.
