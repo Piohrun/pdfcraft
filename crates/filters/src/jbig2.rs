@@ -365,18 +365,26 @@ mod tests {
         assert_eq!(decode(&encode_jbig2_generic(&wide, MAX_JBIG2_COLUMNS, 4).unwrap()), unpack(&wide, MAX_JBIG2_COLUMNS, 4));
         let tall = vec![0x7F; MAX_JBIG2_COLUMNS as usize];
         assert_eq!(decode(&encode_jbig2_generic(&tall, 1, MAX_JBIG2_COLUMNS).unwrap()), unpack(&tall, 1, MAX_JBIG2_COLUMNS));
-        struct Rows(u32);
+        struct Rows(u32, u64);
         impl hayro_jbig2::Decoder for Rows {
-            fn push_pixel(&mut self, _: bool) {}
-            fn push_pixel_chunk(&mut self, _: bool, _: u32) {}
+            fn push_pixel(&mut self, black: bool) {
+                self.1 += u64::from(black);
+            }
+            fn push_pixel_chunk(&mut self, black: bool, chunks: u32) {
+                self.1 += u64::from(black) * u64::from(chunks) * 8;
+            }
             fn next_line(&mut self) {
                 self.0 += 1;
             }
         }
-        let largest = encode_jbig2_generic(&vec![0xFF; 2_048 * 16_384], 16_384, 16_384).unwrap();
-        let mut rows = Rows(0);
+        // One black pixel, so a page that came back blank wouldn't pass.
+        let mut largest = vec![0xFF; 2_048 * 16_384];
+        largest[0] = 0x7F;
+        let largest = encode_jbig2_generic(&largest, 16_384, 16_384).unwrap();
+        let mut rows = Rows(0, 0);
         hayro_jbig2::Image::new_embedded(&largest, None).unwrap().decode(&mut rows).unwrap();
         assert_eq!(rows.0, 16_384);
+        assert_eq!(rows.1, 1);
     }
 
     proptest::proptest! {
