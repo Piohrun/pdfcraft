@@ -266,6 +266,11 @@ impl<'a> Stream<'a> {
             .zip(filters_and_params.params.iter())
             .enumerate()
         {
+            // PdfCraft patch (30): `raw_data` decrypted the data, so there's nothing to undo, and a
+            // chain can name this thousands of times.
+            if matches!(filter, Filter::Crypt) {
+                continue;
+            }
             // PdfCraft patch: see `filter::decode_limit`.
             let limit = crate::filter::decode_limit(image_params, i + 1 == count).min(max);
             let new = filter.apply(

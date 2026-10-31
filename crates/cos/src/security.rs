@@ -15,35 +15,51 @@ use pdfcraft_filters::MAX_CHAIN;
 use crate::document::Held;
 use crate::{Dict, Document, Object, PdfString, Stream};
 
+/// How many references one read or write of an object may follow, with all that it loads on the
+/// way. How an object is treated can be given by reference, and what that loads can do the same: a
+/// file could make one read a tree of them, each object read again once the cache has let it go, or
+/// have every dictionary of an object refer to something that takes a scan of the file to not find.
+/// An object takes a few of these, and a dozen if every part of it is given by reference; past
+/// this they read as absent.
+const MAX_FOLLOWED: u32 = 32;
+
 std::thread_local! {
-    /// Whether this thread is inside [`following`].
-    static FOLLOWING: Cell<bool> = const { Cell::new(false) };
+    /// How many [`FollowScope`]s this thread is inside.
+    static SCOPES: Cell<u32> = const { Cell::new(0) };
+    /// The references followed in the outermost of them.
+    static FOLLOWED: Cell<u32> = const { Cell::new(0) };
 }
 
-/// Clears [`FOLLOWING`], whatever happens while it is set.
-struct Following;
+/// One read or write of an object, with everything it loads on the way: what [`MAX_FOLLOWED`] counts.
+pub(crate) struct FollowScope;
 
-impl Drop for Following {
+impl FollowScope {
+    pub(crate) fn enter() -> Self {
+        if SCOPES.replace(SCOPES.get().saturating_add(1)) == 0 {
+            FOLLOWED.set(0);
+        }
+        FollowScope
+    }
+}
+
+impl Drop for FollowScope {
     fn drop(&mut self) {
-        FOLLOWING.set(false);
+        SCOPES.set(SCOPES.get().saturating_sub(1));
     }
 }
 
-/// What `f` gives, or `nested` if this is inside another `following`. Loading an object can read
-/// what its dictionary gives by reference, and what that loads could do the same: a file could
-/// make one load a tree of them, each object read again once the cache has let it go. So what is
-/// loaded for this doesn't follow its own. These entries are names, arrays of them and small
-/// dictionaries, which have none, so nothing a real file holds is lost.
-pub(crate) fn following<T>(nested: T, f: impl FnOnce() -> T) -> T {
-    if FOLLOWING.replace(true) {
-        return nested;
+/// What `f` gives, counted against [`MAX_FOLLOWED`], or `spent` past it. Called inside a
+/// [`FollowScope`], which is what starts the count again.
+pub(crate) fn following<T>(spent: T, f: impl FnOnce() -> T) -> T {
+    if FOLLOWED.get() >= MAX_FOLLOWED {
+        return spent;
     }
-    let _following = Following;
+    FOLLOWED.set(FOLLOWED.get() + 1);
     f()
 }
 
-/// `o`, or the object it refers to, for what decides how a stream or dictionary is treated. Inside
-/// [`following`] a reference reads as absent.
+/// `o`, or the object it refers to, for what decides how a stream or dictionary is treated. Past
+/// [`MAX_FOLLOWED`] a reference reads as absent.
 fn followed<'o>(doc: &Document, o: &'o Object) -> Held<'o> {
     match o {
         Object::Ref(_) => following(Held::Direct(&Object::Null), || doc.held(o)),
@@ -142,6 +158,11 @@ fn named_crypt_filter(doc: &Document, dict: &Dict) -> Option<Vec<u8>> {
 /// has no `/Subtype`; a dictionary with one (an annotation, whose `/Contents` is the comment
 /// text) or with another `/Type` is never exempt, whatever else it carries.
 fn is_signature_dict(doc: &Document, d: &Dict) -> bool {
+    // All this decides is what happens to such a /Contents, so nothing is followed without one: an
+    // object can hold any number of dictionaries.
+    if !matches!(d.get(b"Contents"), Some(Object::String(_))) {
+        return false;
+    }
     // A null entry, or one that refers to nothing, is an absent one (ISO 32000-2 §7.3.7, §7.3.10).
     let entry = |key: &[u8]| d.get(key).map(|v| followed(doc, v)).filter(|v| !matches!(**v, Object::Null));
     if entry(b"Subtype").is_some() {
@@ -149,32 +170,42 @@ fn is_signature_dict(doc: &Document, d: &Dict) -> bool {
     }
     match entry(b"Type") {
         Some(t) => matches!(t.as_name(), Some(b"Sig" | b"DocTimeStamp")),
-        None => matches!(d.get(b"Contents"), Some(Object::String(_))) && matches!(entry(b"ByteRange").as_deref(), Some(Object::Array(_))),
+        None => matches!(entry(b"ByteRange").as_deref(), Some(Object::Array(_))),
     }
 }
 
-/// `source` without the `/Crypt` entries of its filter chain and their decode parameters, the two
-/// made direct if they were given by reference. Called on a dictionary [`named_crypt_filter`] found
-/// a filter in, so the chain is short, and no more parameters are copied than it has filters.
-fn drop_crypt_filter(doc: &Document, source: &Dict) -> Dict {
-    let mut dict = source.clone();
-    let filter = source.get(b"Filter").map(|f| followed(doc, f));
-    let chain = match filter.as_deref() {
-        Some(Object::Array(a)) => a.clone(),
-        Some(f) => vec![f.clone()],
+/// The dictionary of `source` without the `/Crypt` entries of its filter chain and their decode
+/// parameters. The two come out direct when given by reference, which every stream of a file can
+/// share, so of what was shared only small values are copied: filter names, and the parameters
+/// decoders read ([`Document::with_direct_parms`]). The chain is short, as [`named_crypt_filter`]
+/// found a filter in it.
+fn drop_crypt_filter(doc: &Document, source: &Stream) -> Dict {
+    let entry = |f: &Object| match f {
+        f if is_crypt(doc, f) => Object::name("Crypt"),
+        Object::Name(_) | Object::Ref(_) => f.clone(),
+        _ => Object::Null,
+    };
+    let filter = source.dict.get(b"Filter").map(|f| followed(doc, f));
+    let chain: Vec<Object> = match filter.as_deref() {
+        Some(Object::Array(a)) => a.iter().map(entry).collect(),
+        Some(f) => vec![entry(f)],
         None => Vec::new(),
     };
-    let crypt: Vec<bool> = chain.iter().map(|f| is_crypt(doc, f)).collect();
+    let crypt: Vec<bool> = chain.iter().map(|f| f.as_name() == Some(b"Crypt")).collect();
+    let mut chained = Stream::from_raw(source.dict.clone(), Vec::new());
+    chained.dict.set(b"Filter".to_vec(), Object::Array(chain.clone()));
     // A lone parameter dictionary belongs to the first filter (as `named_crypt_filter` reads it).
-    match source.get(b"DecodeParms").map(|p| followed(doc, p)).as_deref() {
-        Some(Object::Array(p)) => {
-            let parms: Vec<Object> = p.iter().zip(&crypt).filter(|(_, c)| !**c).map(|(p, _)| p.clone()).collect();
-            dict.set(b"DecodeParms".to_vec(), Object::Array(parms));
-        }
-        Some(Object::Dict(_)) if crypt.first() == Some(&true) => {
+    let parms = match doc.with_direct_parms(&chained).dict.get(b"DecodeParms") {
+        Some(Object::Array(p)) => Some(Object::Array(p.iter().zip(&crypt).filter(|(_, c)| !**c).map(|(p, _)| p.clone()).collect())),
+        Some(Object::Dict(_)) if crypt.first() == Some(&true) => None,
+        _ => source.dict.get(b"DecodeParms").cloned(),
+    };
+    let mut dict = source.dict.clone();
+    match parms {
+        Some(p) => dict.set(b"DecodeParms".to_vec(), p),
+        None => {
             dict.remove(b"DecodeParms");
         }
-        _ => {}
     }
     let filters: Vec<Object> = chain.into_iter().zip(&crypt).filter(|(_, c)| !**c).map(|(f, _)| f).collect();
     if filters.is_empty() {
@@ -207,6 +238,7 @@ pub(crate) enum Pass {
 /// `o` is as `doc` holds it: what a stream's dictionary gives by reference is read from `doc`, so
 /// its references have to be the document's, not a save's renumbered ones.
 pub(crate) fn transform(doc: &Document, h: &SecurityHandler, o: &Object, num: u32, generation: u16, pass: Pass) -> Object {
+    let _scope = FollowScope::enter();
     let decrypt = pass == Pass::Decrypt;
     let strings = |s: &PdfString| {
         let bytes = if decrypt { h.decrypt_string(num, generation, &s.bytes) } else { h.encrypt_string(num, generation, &s.bytes) };
@@ -240,9 +272,9 @@ fn walk(doc: &Document, o: &Object, strings: &dyn Fn(&PdfString) -> PdfString, h
                 return Object::Stream(Stream { dict: walked(&s.dict), raw: s.raw.clone() });
             }
             let mut named = named_crypt_filter(doc, &s.dict);
-            // Before the walk: what it copies out of a reference has strings to encrypt as well.
+            // Before the walk, which then encrypts what is in the dictionary this leaves.
             let foreign = pass == Pass::EncryptReplacing && named.as_deref().is_some_and(|n| !h.dict().crypt_filters.iter().any(|(f, _)| f == n));
-            let dropped = foreign.then(|| drop_crypt_filter(doc, &s.dict));
+            let dropped = foreign.then(|| drop_crypt_filter(doc, s));
             if dropped.is_some() {
                 named = None;
             }

@@ -380,14 +380,8 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     if let Some(encrypt @ Object::Dict(_)) = trailer_in.get(b"Encrypt") {
         trailer.set(b"Encrypt".to_vec(), renumber(encrypt, &map));
     }
-    // Written direct, as it has to be with /Encrypt: nothing else in the file holds it now.
     if let Some(id) = trailer_in.get(b"ID") {
-        let id = reader.document.resolve(id);
-        let direct = match &*id {
-            Object::Array(a) => Object::Array(a.iter().map(|s| (*reader.document.resolve(s)).clone()).collect()),
-            other => other.clone(),
-        };
-        trailer.set(b"ID".to_vec(), direct);
+        trailer.set(b"ID".to_vec(), direct_id(&reader.document, id));
     }
     for (key, value) in trailer_in.iter() {
         if !trailer_key_rewritten(key) {
@@ -459,6 +453,18 @@ impl ObjectStreamBatch {
 
 /// Trailer keys a full rewrite generates itself. Everything else is copied, with references
 /// renumbered, so a save does not drop metadata the reader accepted.
+/// `/ID` for the trailer, direct, as it has to be with `/Encrypt`: nothing else in the file holds
+/// what it refers to now. Given by reference it is at most two strings, however many references a
+/// file gave, so that one large string isn't copied for each of them.
+fn direct_id(doc: &Document, id: &Object) -> Object {
+    if matches!(id, Object::Array(a) if !a.iter().any(|s| matches!(s, Object::Ref(_)))) {
+        return id.clone();
+    }
+    let held = doc.resolve(id);
+    let strings = held.as_array().into_iter().flatten().take(2).map(|s| doc.resolve(s)).filter(|s| s.as_string().is_some());
+    Object::Array(strings.map(|s| (*s).clone()).collect())
+}
+
 fn trailer_key_rewritten(key: &[u8]) -> bool {
     matches!(
         key,

@@ -7283,6 +7283,38 @@ fn content_after_an_inline_image_holding_ei_is_still_read() {
     assert!(page.contains("AFTER"), "the content after the image was lost: {page:?}");
 }
 
+/// `/Crypt` has nothing to undo, so a chain naming it thousands of times costs no copy of the data
+/// for each. A chain of filters that does work has its own cost, which this isn't about.
+#[test]
+fn a_long_chain_of_crypt_filters_takes_no_time() {
+    use super::*;
+    let content = format!("1 0 0 rg 0 0 200 200 re f\n{}", " ".repeat(16 << 20));
+    let chain = "/Crypt ".repeat(20_000);
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n\
+             4 0 obj << /Filter [{chain}] /Length {} >> stream\n{content}\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    );
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let page = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        let start = (100 * page.width as usize + 100) * 4;
+        let _ = done.send(page.rgba.get(start..start + 4).map(<[u8]>::to_vec));
+    });
+    let pixel = finished.recv_timeout(std::time::Duration::from_secs(10)).expect("the chain costs no copy for each entry");
+    assert_eq!(pixel, Some(vec![255, 0, 0, 255]));
+}
+
 /// A lone filter takes its parameters as a dictionary or as an array of one, and given as an array
 /// of one itself it takes either too. The form of `/Filter` decided which was read, so a predictor
 /// in the other form was lost and the content came out as noise. `/StmF` and `/StrF` are optional,

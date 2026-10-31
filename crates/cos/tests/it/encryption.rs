@@ -601,8 +601,8 @@ fn an_identity_crypt_filter_selected_by_reference_leaves_a_stream_alone() {
 }
 
 /// New protection drops a crypt filter it doesn't define, whichever way the stream selected it. The
-/// chain comes out direct, and what its parameters hold is encrypted with the rest of the stream's
-/// dictionary, though it was copied out of an object of its own.
+/// chain comes out direct. Parameters in the stream's own dictionary stay, encrypted with it; of an
+/// array in an object of its own, which every stream can share, only what decoders read is copied.
 #[test]
 fn protecting_drops_a_crypt_filter_selected_by_reference() {
     let protected = |doc: &mut Document| {
@@ -634,20 +634,81 @@ fn protecting_drops_a_crypt_filter_selected_by_reference() {
         }
         assert!(hayro_syntax::Pdf::new(bytes).is_ok(), "form {form}");
     }
+    for shared in [false, true] {
+        let mut doc = Document::open(Arc::new(fixture())).unwrap();
+        let mut named = pdfcraft_cos::Dict::new();
+        named.set(b"Name".to_vec(), Object::name("MyCF"));
+        let mut other = pdfcraft_cos::Dict::new();
+        other.set(b"Note".to_vec(), Object::String(PdfString::text("Private note")));
+        other.set(b"Predictor".to_vec(), Object::Int(1));
+        let parms = Object::Array(vec![Object::Dict(named), Object::Dict(other)]);
+        let parms = if shared { Object::Ref(doc.add(parms)) } else { parms };
+        select(&mut doc, (Object::Array(vec![Object::name("Crypt"), Object::name("ASCIIHexDecode")]), parms));
+        let bytes = protected(&mut doc);
+        assert!(!holds(&bytes, "Private note"), "shared: {shared}");
+        let back = Document::open(Arc::new(bytes)).unwrap();
+        let contents = back.get(contents_of(&back));
+        let kept = contents.as_dict().unwrap().get(b"DecodeParms").unwrap().as_array().unwrap();
+        assert_eq!(kept.len(), 1, "one filter left, one entry");
+        let kept = kept[0].as_dict().unwrap();
+        assert_eq!(kept.get(b"Predictor"), Some(&Object::Int(1)), "shared: {shared}");
+        assert_eq!(kept.get(b"Note").is_some(), !shared, "shared: {shared}");
+    }
+}
+
+/// Every stream of a file can share one large object as its `/DecodeParms` or `/Filter`, which
+/// costs nothing until new protection drops a crypt filter from each. Copied whole, a 1 MB file
+/// came out at 1 GB.
+#[test]
+fn protecting_copies_no_large_object_into_every_stream() {
+    let pad = Object::Array(vec![Object::Int(1); 100_000]);
     let mut doc = Document::open(Arc::new(fixture())).unwrap();
-    let mut named = pdfcraft_cos::Dict::new();
-    named.set(b"Name".to_vec(), Object::name("MyCF"));
-    let mut other = pdfcraft_cos::Dict::new();
-    other.set(b"Note".to_vec(), Object::String(PdfString::text("Private note")));
-    let parms = doc.add(Object::Array(vec![Object::Dict(named), Object::Dict(other)]));
-    select(&mut doc, (Object::Array(vec![Object::name("Crypt"), Object::name("ASCIIHexDecode")]), Object::Ref(parms)));
-    let bytes = protected(&mut doc);
-    assert!(!holds(&bytes, "Private note"), "copied out of its object, it is encrypted all the same");
-    let back = Document::open(Arc::new(bytes)).unwrap();
-    let contents = back.get(contents_of(&back));
-    let kept = contents.as_dict().unwrap().get(b"DecodeParms").unwrap().as_array().unwrap();
-    assert_eq!(kept.len(), 1, "one filter left, one entry");
-    assert_eq!(kept[0].as_dict().unwrap().get(b"Note").unwrap().as_string().unwrap().to_text(), "Private note");
+    let mut large = pdfcraft_cos::Dict::new();
+    large.set(b"Pad".to_vec(), pad.clone());
+    let parms = doc.add(Object::Array(vec![Object::Null, Object::Dict(large)]));
+    let filter = doc.add(Object::Array(vec![Object::name("Crypt"), Object::name("ASCIIHexDecode"), pad]));
+    let mut streams = Vec::new();
+    for _ in 0..200 {
+        let mut by_parms = pdfcraft_cos::Dict::new();
+        by_parms.set(b"Filter".to_vec(), Object::Array(vec![Object::name("Crypt"), Object::name("ASCIIHexDecode")]));
+        by_parms.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+        streams.push(Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(by_parms, b"41>".to_vec())))));
+        let mut by_filter = pdfcraft_cos::Dict::new();
+        by_filter.set(b"Filter".to_vec(), Object::Ref(filter));
+        streams.push(Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(by_filter, b"41>".to_vec())))));
+    }
+    doc.update_dict(doc.root().unwrap(), |c| c.set(b"Test".to_vec(), Object::Array(streams))).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(bytes.len() < 1 << 20, "{} bytes", bytes.len());
+}
+
+/// A file can name one large string thousands of times in `/ID`, which holds two. An encrypted file
+/// keeps its `/ID`, so each copy would be in the file a save writes.
+#[test]
+fn a_file_identifier_of_many_references_is_two_strings() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes128,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [9; 32],
+    })
+    .unwrap();
+    let large = doc.add(Object::String(PdfString { bytes: vec![0xAB; 100_000], hex: true }));
+    doc.trailer_mut().set(b"ID".to_vec(), Object::Array(vec![Object::Ref(large); 500]));
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(bytes.len() < 1 << 20, "{} bytes", bytes.len());
 }
 
 /// What a file can do with those references: point a stream's selector at the stream itself, or at
@@ -755,6 +816,7 @@ fn protecting_leaves_a_parameter_array_too_short_for_the_crypt_filter() {
         let contents = back.get(contents_of(&back));
         let filter = contents.as_dict().unwrap().get(b"Filter").unwrap().as_array().unwrap();
         assert_eq!(filter.len(), 1, "only /Crypt goes");
+        assert_eq!(filter[0].as_name(), Some(b"ASCIIHexDecode".as_slice()), "the other filter stays as it was");
     }
 }
 
@@ -860,6 +922,7 @@ fn a_signature_dictionary_is_known_in_every_form() {
 struct Classic {
     bytes: Vec<u8>,
     root: ObjRef,
+    pages: ObjRef,
     info: ObjRef,
     encrypt: ObjRef,
     id: Vec<u8>,
@@ -882,27 +945,121 @@ fn classic_file() -> Classic {
     let encrypt = doc.trailer().reference(b"Encrypt").unwrap();
     let id = doc.trailer().get(b"ID").unwrap().as_array().unwrap()[0].as_string().unwrap().bytes.clone();
     let dict = doc.get(encrypt).as_dict().cloned().unwrap();
-    Classic { root: doc.root().unwrap(), info: doc.trailer().reference(b"Info").unwrap(), bytes, encrypt, id, dict }
+    let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+    Classic { root: doc.root().unwrap(), pages, info: doc.trailer().reference(b"Info").unwrap(), bytes, encrypt, id, dict }
 }
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02X}")).collect()
 }
 
-/// `bytes` with an update appended: `objects`, and a trailer of `trailer` entries.
-fn updated(bytes: &[u8], objects: &[(u32, String)], trailer: &str) -> Vec<u8> {
+/// `bytes` with an update appended: `objects`, and a trailer of `trailer` entries, in which `@n`
+/// stands for the offset of object `n`. An object with nothing in it gets an entry of the
+/// cross-reference table that points at nothing.
+fn updated(bytes: &[u8], objects: &[(u32, Vec<u8>)], trailer: &str) -> Vec<u8> {
     let at = bytes.windows(9).rposition(|w| w == b"startxref").unwrap();
     let prev: usize = String::from_utf8_lossy(&bytes[at + 9..]).split_whitespace().next().unwrap().parse().unwrap();
     let mut out = bytes.to_vec();
     let mut table = String::from("xref\n");
+    let mut trailer = trailer.to_string();
     for (num, body) in objects {
+        if body.is_empty() {
+            table.push_str(&format!("{num} 1\n0000000010 00000 n \n"));
+            continue;
+        }
+        trailer = trailer.replace(&format!("@{num}"), &out.len().to_string());
         table.push_str(&format!("{num} 1\n{:010} 00000 n \n", out.len()));
-        out.extend_from_slice(format!("{num} 0 obj\n{body}\nendobj\n").as_bytes());
+        out.extend_from_slice(format!("{num} 0 obj\n").as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
     }
     let xref = out.len();
     out.extend_from_slice(table.as_bytes());
-    out.extend_from_slice(format!("trailer\n<< {trailer} /Size 1000 /Prev {prev} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    out.extend_from_slice(format!("trailer\n<< {trailer} /Size 2000 /Prev {prev} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
     out
+}
+
+/// The `/Encrypt` dictionary of `file`, with `/O`, `/StmF` and `/StrF` as given.
+fn encrypt_with(file: &Classic, o: &str, filter: &str) -> Vec<u8> {
+    let string = |key: &[u8]| hex(&file.dict.get(key).unwrap().as_string().unwrap().bytes);
+    format!(
+        "<< /Filter /Standard /V 4 /R 4 /Length 128 /P {} /O {o} /U <{}> /CF << /StdCF << /CFM /AESV2 /Length 16 /AuthEvent /DocOpen >> >> /StmF /{filter} /StrF /{filter} >>",
+        file.dict.int(b"P").unwrap(),
+        string(b"U")
+    )
+    .into_bytes()
+}
+
+/// An object stream can have its parameters by reference, and a stream's crypt filter can be
+/// selected by a member of it: legal together, though each is rare. What reads the stream first
+/// goes through the object stream, and members must come out of it as they do read directly. They
+/// didn't, while a read made for a selector wasn't allowed to follow its own: the object stream was
+/// kept undecoded, its members lost for good, and a full save wrote nulls without saying so.
+#[test]
+fn an_object_stream_reached_from_a_selector_keeps_its_members() {
+    let file = classic_file();
+    let parms = "[<< /Name /Identity >> null]";
+    let header = format!("902 0 903 {} ", parms.len() + 1);
+    let members = format!("{header}{parms} << /Keep (yes) >>");
+    let (mut rows, mut before) = (vec![1u8], 0u8);
+    for b in members.bytes() {
+        rows.push(b.wrapping_sub(before));
+        before = b;
+    }
+    let coded = pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), &rows).raw;
+    let mut object_stream =
+        format!("<< /Type /ObjStm /N 2 /First {} /Filter /FlateDecode /DecodeParms 911 0 R /Length {} >>\nstream\n", header.len(), coded.len())
+            .into_bytes();
+    object_stream.extend_from_slice(&coded);
+    object_stream.extend_from_slice(b"\nendstream");
+    let data = [2u8, 0x03, 0x8E, 0, 2, 0x03, 0x8E, 1];
+    let mut xref = format!("<< /Type /XRef /Size 2000 /W [1 2 1] /Index [902 2] /Length {} >>\nstream\n", data.len()).into_bytes();
+    xref.extend_from_slice(&data);
+    xref.extend_from_slice(b"\nendstream");
+    let string = |key: &[u8]| format!("<{}>", hex(&file.dict.get(key).unwrap().as_string().unwrap().bytes));
+    let objects = [
+        (file.root.num, format!("<< /Type /Catalog /Pages {} 0 R /A 900 0 R /B 903 0 R >>", file.pages.num).into_bytes()),
+        (file.encrypt.num, encrypt_with(&file, &string(b"O"), "Identity")),
+        (900, b"<< /Filter [/Crypt /ASCIIHexDecode] /DecodeParms 902 0 R /Length 1 >>\nstream\n>\nendstream".to_vec()),
+        (910, object_stream),
+        (911, format!("<< /Predictor 11 /Columns {} >>", members.len()).into_bytes()),
+        (912, xref),
+    ];
+    let trailer = format!("/Root {} 0 R /Encrypt {} 0 R /ID [<{id}> <{id}>] /XRefStm @912", file.root.num, file.encrypt.num, id = hex(&file.id));
+    let bytes = updated(&file.bytes, &objects, &trailer);
+    let keep =
+        |doc: &Document, r: &Object| doc.resolve(r).as_dict().and_then(|d| d.get(b"Keep")).and_then(Object::as_string).map(|s| s.bytes.clone());
+    let member = Object::Ref(ObjRef::new(903, 0));
+    let doc = Document::open(Arc::new(bytes.clone())).unwrap();
+    assert_eq!(keep(&doc, &member).as_deref(), Some(b"yes".as_slice()), "read first");
+    let doc = Document::open(Arc::new(bytes.clone())).unwrap();
+    let _ = doc.get(ObjRef::new(900, 0));
+    assert_eq!(keep(&doc, &member).as_deref(), Some(b"yes".as_slice()), "read after the stream selecting from it");
+    let saved = write_full(&Document::open(Arc::new(bytes)).unwrap(), &SaveOptions::default()).unwrap();
+    let back = Document::open(Arc::new(saved)).unwrap();
+    let catalog = back.get(back.root().unwrap());
+    assert_eq!(keep(&back, catalog.as_dict().unwrap().get(b"B").unwrap()).as_deref(), Some(b"yes".as_slice()), "after a full save");
+}
+
+/// An object can hold any number of dictionaries. Finding out whether each is a signature's took a
+/// load, and one that fails takes a scan of the file, so one read of one object could hang.
+#[test]
+fn a_read_follows_only_so_many_references() {
+    let file = classic_file();
+    let mut many = String::from("<< /Many [");
+    for _ in 0..40_000 {
+        many.push_str("<< /Contents () /Type 950 0 R >>");
+    }
+    many.push_str("] >>");
+    let objects = [(940, many.into_bytes()), (950, Vec::new())];
+    let trailer = format!("/Root {} 0 R /Encrypt {} 0 R /ID [<{id}> <{id}>]", file.root.num, file.encrypt.num, id = hex(&file.id));
+    let bytes = updated(&file.bytes, &objects, &trailer);
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        let _ = done.send(doc.get(ObjRef::new(940, 0)).as_dict().is_some());
+    });
+    assert_eq!(finished.recv_timeout(std::time::Duration::from_secs(10)), Ok(true), "one read must not scan the file for each dictionary");
 }
 
 /// The strings of `/Encrypt` are never encrypted (ISO 32000-2 §7.6.2), and can be objects of their
@@ -916,7 +1073,11 @@ fn encrypt_strings_given_by_reference_stay_as_stored() {
         "<< /Filter /Standard /V 4 /R 4 /Length 128 /P {} /O 900 0 R /U 901 0 R /CF << /StdCF << /CFM /AESV2 /Length 16 /AuthEvent /DocOpen >> >> /StmF /StdCF /StrF /StdCF >>",
         file.dict.int(b"P").unwrap()
     );
-    let objects = [(file.encrypt.num, replaced), (900, format!("<{}>", string(b"O"))), (901, format!("<{}>", string(b"U")))];
+    let objects = [
+        (file.encrypt.num, replaced.into_bytes()),
+        (900, format!("<{}>", string(b"O")).into_bytes()),
+        (901, format!("<{}>", string(b"U")).into_bytes()),
+    ];
     let trailer =
         format!("/Root {} 0 R /Info {} 0 R /Encrypt {} 0 R /ID [<{id}> <{id}>]", file.root.num, file.info.num, file.encrypt.num, id = hex(&file.id));
     let source = Document::open(Arc::new(updated(&file.bytes, &objects, &trailer))).unwrap();
@@ -936,12 +1097,12 @@ fn encrypt_strings_given_by_reference_stay_as_stored() {
 fn a_file_identifier_given_by_reference_is_read() {
     let file = classic_file();
     let id = hex(&file.id);
-    let reference = |entries: &str, objects: &[(u32, String)]| {
+    let reference = |entries: &str, objects: &[(u32, Vec<u8>)]| {
         let trailer = format!("/Root {} 0 R /Encrypt {} 0 R /ID {entries}", file.root.num, file.encrypt.num);
         updated(&file.bytes, objects, &trailer)
     };
-    let whole = reference("900 0 R", &[(900, format!("[<{id}> <{id}>]"))]);
-    let entries = reference("[900 0 R 901 0 R]", &[(900, format!("<{id}>")), (901, format!("<{id}>"))]);
+    let whole = reference("900 0 R", &[(900, format!("[<{id}> <{id}>]").into_bytes())]);
+    let entries = reference("[900 0 R 901 0 R]", &[(900, format!("<{id}>").into_bytes()), (901, format!("<{id}>").into_bytes())]);
     for file in [whole, entries] {
         let source = Document::open(Arc::new(file)).unwrap();
         assert_eq!(content(&source), SECRET);
@@ -983,8 +1144,8 @@ fn a_direct_encrypt_dictionary_keeps_what_it_refers_to() {
 
 /// How a stream is treated can be given by reference, and what that loads can be a stream too. A
 /// file can make a ladder of those, where each rung reads the rung below, then two trees wider than
-/// the object cache, which push that rung out of it, then the rung below again. If what is loaded
-/// for a selector followed its own, each rung would take twice what the one below does.
+/// the object cache, which push that rung out of it, then the rung below again. Each rung would
+/// take twice what the one below does, if one read could follow any number of references.
 #[test]
 fn selectors_that_lead_to_selectors_load_at_once() {
     let mut doc = Document::open(Arc::new(protect(Algorithm::Aes128, "", "owner", -1))).unwrap();

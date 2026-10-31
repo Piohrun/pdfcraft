@@ -317,6 +317,7 @@ impl Document {
         // cycles such as `6 0 obj << /Length 6 0 R >>`. Bound the nesting on every path.
         let _guard =
             LoadGuard::enter(num).ok_or_else(|| CosError::Syntax { offset: 0, detail: format!("reference cycle while loading object {num}") })?;
+        let _scope = crate::security::FollowScope::enter();
         let obj = self.load(num, 0)?;
         let obj = Arc::new(obj);
         // The editing cache is bounded like the scan reader's: re-parsing a file-backed view
@@ -507,7 +508,9 @@ impl Document {
         let Object::Stream(s) = &*loaded else { return Err(CosError::MissingObject(num)) };
         let n = s.dict.int(b"N").unwrap_or(0).clamp(0, 1_000_000) as usize;
         let first = usize::try_from(s.dict.int(b"First").unwrap_or(0).max(0)).ok();
-        // Its parameters can be given by reference, and can sit in another object stream.
+        // Its parameters can be given by reference, and can sit in another object stream. A scan of
+        // the file's object streams comes here without a read around it.
+        let _scope = crate::security::FollowScope::enter();
         let readable = crate::security::following(Cow::Borrowed(s), || self.with_direct_parms(s));
         let data = readable.decoded_within(self.stream_limit)?;
         let mut lx = Lexer::new(&data, 0);
