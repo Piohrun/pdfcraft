@@ -5,7 +5,7 @@ use crate::filter::Filter;
 use crate::object;
 use crate::object::Dict;
 use crate::object::Name;
-use crate::object::dict::keys::{DECODE_PARMS, DP, F, FILTER, LENGTH, TYPE};
+use crate::object::dict::keys::{DECODE_PARMS, DP, F, FILTER, LENGTH, NAME, TYPE};
 use crate::object::{Array, ObjectIdentifier};
 use crate::object::{Object, ObjectLike, ObjectRefLike};
 use crate::reader::Reader;
@@ -13,6 +13,7 @@ use crate::reader::{Readable, ReaderContext, ReaderExt, Skippable};
 use crate::trivia::is_white_space_character;
 use crate::util::{OptionLog, find_needle};
 use alloc::borrow::Cow;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::{Debug, Formatter};
 use smallvec::SmallVec;
@@ -119,6 +120,15 @@ impl<'a> Stream<'a> {
         }
     }
 
+    /// PdfCraft patch (30): the crypt filter the stream names for itself: `/Crypt` in its chain, its
+    /// name in that filter's parameters, or `/Identity` without one (ISO 32000-2 §7.4.10).
+    fn crypt_filter(&self) -> Option<String> {
+        let FiltersAndParams { filters, params } = self.filters_and_params();
+        let i = filters.iter().position(|f| matches!(f, Filter::Crypt))?;
+        let name = params.get(i).and_then(|p| p.get::<Name<'_>>(NAME));
+        Some(name.map_or_else(|| "Identity".to_string(), |n| n.as_str().to_string()))
+    }
+
     /// Return the raw, decrypted data of the stream.
     ///
     /// Stream filters will not be applied.
@@ -132,9 +142,13 @@ impl<'a> Stream<'a> {
                 .map(|t| t.as_ref() != b"XRef")
                 .unwrap_or(true)
         {
+            let own = self.crypt_filter();
+            let target = own
+                .as_deref()
+                .map_or(DecryptionTarget::Stream, DecryptionTarget::NamedStream);
             Cow::Owned(
                 ctx.xref()
-                    .decrypt(self.obj_id(), self.data, DecryptionTarget::Stream)
+                    .decrypt(self.obj_id(), self.data, target)
                     // TODO: MAybe an error would be better?
                     .unwrap_or_default(),
             )

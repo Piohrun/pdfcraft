@@ -7282,3 +7282,121 @@ fn content_after_an_inline_image_holding_ei_is_still_read() {
     // `EI` inside the data was not taken for the end.
     assert!(page.contains("AFTER"), "the content after the image was lost: {page:?}");
 }
+
+/// A stream can pick its own crypt filter: `/Crypt` in `/Filter`, with the filter's name in
+/// `/DecodeParms`, or `/Identity` without one (ISO 32000-2 §7.4.10). The renderer used the
+/// document's filter for every stream, and then couldn't decode `/Crypt`, so the page stayed blank.
+#[test]
+fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
+    use super::*;
+    use pdfcraft_cos::{Algorithm, Dict, Document, NewEncryption, Object, SaveOptions, Stream, write_full, write_incremental};
+    let content = "1 0 0 rg 0 0 200 200 re f";
+    let page = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    );
+    let centre = |bytes: Vec<u8>| -> [u8; 4] {
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    let name = |n: &str| {
+        let mut parms = Dict::new();
+        parms.set(b"Name".to_vec(), Object::name(n));
+        Object::Dict(parms)
+    };
+    let hex: String = content.bytes().map(|b| format!("{b:02X}")).chain([">".to_string()]).collect();
+    let crypt = || Object::name("Crypt");
+    let contents_of = |doc: &Document| {
+        let catalog = doc.get(doc.root().unwrap());
+        let pages = doc.get(catalog.as_dict().unwrap().reference(b"Pages").unwrap());
+        let page = doc.resolve(&pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap()[0]);
+        page.as_dict().unwrap().reference(b"Contents").unwrap()
+    };
+    for (algorithm, filters) in [(Algorithm::Rc4_128, false), (Algorithm::Aes128, true), (Algorithm::Aes256, true)] {
+        let mut doc = Document::open(Arc::new(page.clone().into_bytes())).unwrap();
+        doc.set_encryption(&NewEncryption {
+            algorithm,
+            user_password: "",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [9; 32],
+        })
+        .unwrap();
+        let protected = write_full(&doc, &SaveOptions::default()).unwrap();
+        assert_eq!(centre(protected.clone()), [255, 0, 0, 255], "{algorithm:?}: the document's own filter");
+        // A filter of its own name that stores streams as they are, beside the document's.
+        let mut doc = Document::open(Arc::new(protected)).unwrap();
+        if filters {
+            let encrypt = doc.trailer().reference(b"Encrypt").unwrap();
+            doc.update_dict(encrypt, |e| {
+                let Some(Object::Dict(cf)) = e.get(b"CF") else { panic!("no /CF") };
+                let mut cf = cf.clone();
+                let mut stored = Dict::new();
+                stored.set(b"CFM".to_vec(), Object::name("None"));
+                cf.set(b"Stored".to_vec(), Object::Dict(stored));
+                e.set(b"CF".to_vec(), Object::Dict(cf));
+            })
+            .unwrap();
+        }
+        let protected = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        let spellings = [
+            "no name",
+            "/Identity",
+            "StdCF",
+            "Stored",
+            "/DecodeParms by reference",
+            "/Filter by reference",
+            "an entry of /Filter by reference",
+            "an entry of /DecodeParms by reference",
+            "/Name by reference",
+            "before another filter",
+        ];
+        for what in spellings {
+            let mut doc = Document::open(Arc::new(protected.clone())).unwrap();
+            let (filter, parms) = match what {
+                "no name" => (crypt(), None),
+                "/Identity" => (crypt(), Some(name("Identity"))),
+                "StdCF" => (crypt(), Some(name("StdCF"))),
+                "Stored" => (crypt(), Some(name("Stored"))),
+                "/DecodeParms by reference" => (crypt(), Some(Object::Ref(doc.add(name("StdCF"))))),
+                "/Filter by reference" => (Object::Ref(doc.add(crypt())), Some(name("StdCF"))),
+                "an entry of /Filter by reference" => (Object::Array(vec![Object::Ref(doc.add(crypt()))]), Some(Object::Array(vec![name("StdCF")]))),
+                "an entry of /DecodeParms by reference" => {
+                    (Object::Array(vec![crypt()]), Some(Object::Array(vec![Object::Ref(doc.add(name("StdCF")))])))
+                }
+                "/Name by reference" => {
+                    let mut parms = Dict::new();
+                    parms.set(b"Name".to_vec(), Object::Ref(doc.add(Object::name("StdCF"))));
+                    (crypt(), Some(Object::Dict(parms)))
+                }
+                _ => (Object::Array(vec![crypt(), Object::name("ASCIIHexDecode")]), Some(Object::Array(vec![name("StdCF"), Object::Null]))),
+            };
+            let contents = contents_of(&doc);
+            let Object::Stream(s) = doc.get(contents).as_ref().clone() else { panic!("no content stream") };
+            let mut dict = s.dict.clone();
+            dict.set(b"Filter".to_vec(), filter);
+            if let Some(parms) = parms {
+                dict.set(b"DecodeParms".to_vec(), parms);
+            }
+            let raw = if what.ends_with("another filter") { hex.clone().into_bytes() } else { content.as_bytes().to_vec() };
+            doc.set(contents, Object::Stream(Stream::from_raw(dict, raw)));
+            let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+            assert_eq!(centre(saved), [255, 0, 0, 255], "{algorithm:?}: {what}");
+        }
+    }
+}
