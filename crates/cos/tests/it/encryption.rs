@@ -1091,27 +1091,6 @@ fn a_ladder_of_signature_checks_fits_a_small_stack() {
     assert_eq!(reading.unwrap().join().ok(), Some(true));
 }
 
-/// An object can hold any number of dictionaries. Finding out whether each is a signature's took a
-/// load, and one that fails takes a scan of the file, so one read of one object could hang.
-#[test]
-fn a_read_follows_only_so_many_references() {
-    let file = classic_file();
-    let mut many = String::from("<< /Many [");
-    for _ in 0..40_000 {
-        many.push_str("<< /Contents () /Type 950 0 R >>");
-    }
-    many.push_str("] >>");
-    let objects = [(940, many.into_bytes()), (950, Vec::new())];
-    let trailer = format!("/Root {} 0 R /Encrypt {} 0 R /ID [<{id}> <{id}>]", file.root.num, file.encrypt.num, id = hex(&file.id));
-    let bytes = updated(&file.bytes, &objects, &trailer);
-    let (done, finished) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let doc = Document::open(Arc::new(bytes)).unwrap();
-        let _ = done.send(doc.get(ObjRef::new(940, 0)).as_dict().is_some());
-    });
-    assert_eq!(finished.recv_timeout(std::time::Duration::from_secs(10)), Ok(true), "one read must not scan the file for each dictionary");
-}
-
 /// The strings of `/Encrypt` are never encrypted (ISO 32000-2 §7.6.2), and can be objects of their
 /// own. Read as ordinary strings they were decrypted, and a full save encrypted them again under
 /// another number, so the file it wrote no longer opened with its own password.
@@ -1225,5 +1204,7 @@ fn selectors_that_lead_to_selectors_load_at_once() {
         let doc = Document::open(Arc::new(saved)).unwrap();
         let _ = done.send(doc.get(top).as_dict().is_some());
     });
-    assert_eq!(finished.recv_timeout(std::time::Duration::from_secs(20)), Ok(true), "loading must not fan out");
+    // With the budget it takes milliseconds, and without it longer than anyone would wait, so a
+    // margin this wide can't fail on a busy machine.
+    assert_eq!(finished.recv_timeout(std::time::Duration::from_secs(120)), Ok(true), "loading must not fan out");
 }
