@@ -545,8 +545,22 @@ fn password_fields(doc: &Document, read: &[Field]) -> Vec<Field> {
 /// [`has_password_flag`]).
 fn password_text(doc: &Document, chain: &[ObjRef]) -> bool {
     let sets_it = |r: &ObjRef| doc.get(*r).as_dict().and_then(|d| field_flags(doc, d)).is_some_and(|ff| ff & flags::PASSWORD != 0);
+    // `/FT` only when direct, as the reading reads it: one given by reference leaves the type
+    // above it in place here as there.
     let text = chain.iter().find_map(|a| doc.get(*a).as_dict().and_then(|d| d.name(b"FT").map(|t| t == b"Tx")));
     text == Some(true) && chain.iter().any(sets_it)
+}
+
+/// Whether the field `chain` starts at ([`field_chain`]) is read as a text field with the
+/// Password flag: the type and the flags of the nearest field that sets them, as the reading
+/// inherits them, a separate widget's own (a node with a `/Parent` and no `/T`) not counting. A kid
+/// that clears the flag isn't a password field here, unlike in [`password_text`].
+fn read_as_password(doc: &Document, chain: &[ObjRef]) -> bool {
+    let field = |a: &&ObjRef| doc.get(**a).as_dict().is_some_and(|d| d.contains(b"T") || !d.contains(b"Parent"));
+    // `/FT` only when direct, as in [`password_text`].
+    let text = chain.iter().filter(field).find_map(|a| doc.get(*a).as_dict().and_then(|d| d.name(b"FT").map(|t| t == b"Tx")));
+    let ff = chain.iter().filter(field).find_map(|a| doc.get(*a).as_dict().and_then(|d| field_flags(doc, d)));
+    text == Some(true) && ff.is_some_and(|ff| ff & flags::PASSWORD != 0)
 }
 
 /// Whether a field the reading left out, or a field or widget under one (`unread`, see
@@ -640,7 +654,8 @@ fn field_chain(doc: &Document, r: ObjRef) -> Vec<ObjRef> {
 ///
 /// A value can sit on the field, on one of its widgets, or on an ancestor it inherits from
 /// (`/V` is inheritable). Each is removed; an ancestor's only when every field inheriting from it
-/// is such a password field, and no field the reading left out other than one is under it. Where an ancestor's value
+/// is such a password field, and no field the reading left out that may inherit it, other than
+/// one, is under it. Where an ancestor's value
 /// is shared with other fields and stays, the
 /// password field gets an empty value of its own so it no longer inherits it. Returns how many
 /// fields were cleared.
@@ -662,11 +677,22 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
     // Each field's ancestors, found once: only values change below, never `/Parent` (#3943
     // review: walking them again for every ancestor of every target was quadratic).
     let chains: Vec<(bool, Vec<ObjRef>)> = reading.items.iter().map(|g| (is_password(g), field_chain(doc, g.obj))).collect();
-    // The fields above those the reading left out other than password fields: a value one of them
-    // carries may be another field's, which isn't read. A password field left out that inherits it
-    // has already stopped the save.
-    let above_unread: std::collections::HashSet<ObjRef> =
-        reading.unread.iter().map(|r| field_chain(doc, *r)).filter(|chain| !password_text(doc, chain)).flatten().collect();
+    // The fields a field the reading left out may inherit a value from, other than one it reads as
+    // a password field: those above it up to the nearest that holds a `/V` (a null one is none,
+    // ISO 32000-2 §7.3.9), whose value it shows. A password field left out that inherits a value
+    // has already stopped the save ([`password_text`] takes in every field `read_as_password`
+    // does).
+    let holds = |a: &ObjRef| doc.get(*a).as_dict().and_then(|d| d.get(b"V")).is_some_and(|v| !matches!(&*held(doc, v), Object::Null));
+    let above_unread: std::collections::HashSet<ObjRef> = reading
+        .unread
+        .iter()
+        .map(|r| field_chain(doc, *r))
+        .filter(|chain| !read_as_password(doc, chain))
+        .flat_map(|chain| {
+            let end = chain.iter().position(holds).map_or(chain.len(), |i| i + 1);
+            chain.into_iter().take(end)
+        })
+        .collect();
     for f in &targets {
         let chain = field_chain(doc, f.obj);
         for w in &f.widgets {

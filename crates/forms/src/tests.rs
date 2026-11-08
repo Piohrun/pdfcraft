@@ -5499,8 +5499,9 @@ fn a_password_field_left_out_of_the_reading_stops_the_save() {
 
 /// #6175 review: an ancestor's value that a password field shares with a field the reading left
 /// out stays for that field: only the fields read are known, so the password field gets an empty
-/// value of its own instead. A field left out elsewhere in the form, or a password field left out
-/// under it with a value of its own, doesn't keep the value of an ancestor only password fields
+/// value of its own instead, also when that field is a kid clearing the Password flag it would
+/// inherit. A field left out elsewhere in the form, or one left out under it with a value of its
+/// own, which it doesn't inherit, doesn't keep the value of an ancestor only password fields
 /// inherit from.
 #[test]
 fn a_value_shared_with_a_field_left_out_under_it_stays() {
@@ -5542,6 +5543,50 @@ fn a_value_shared_with_a_field_left_out_under_it_stays() {
     assert_eq!(read(&doc), ["grp.pw"], "the second password field is left out");
     assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
     assert_eq!((own_value(&doc, 2), own_value(&doc, 3)), (None, None), "the ancestor's value is the password fields' alone");
+    // A kid that clears the flag, left out, is a text field that inherits the value
+    // (a null `/V` is none), so the value stays for it.
+    let mut doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+        "<< /T (grp) /FT /Tx /Ff 8192 /V (secret) /Kids [3 0 R 4 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /T (pw) /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /T (plain) /Ff 0 /V null /Parent 2 0 R /Rect [0 30 100 50] >>".into(),
+    ]);
+    doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"TU".to_vec(), Object::String(PdfString::literal(vec![b' '; crate::read::MAX_TEXT_BYTES]))))
+        .unwrap();
+    assert_eq!(read(&doc), ["grp.pw"], "the plain field is left out");
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert_eq!(own_value(&doc, 2).as_deref(), Some("secret"), "the value stays for the plain field");
+    assert_eq!(own_value(&doc, 3).as_deref(), Some(""), "the password field's own, empty");
+    // A password field left out whose `/V` is null, which inherits the ancestor's value (ISO
+    // 32000-2 §7.3.9), doesn't keep it, nor does its separate widget, whose own `/Ff` isn't its
+    // field's flags.
+    let mut doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+        "<< /T (grp) /FT /Tx /Ff 8192 /V (secret) /Kids [3 0 R 4 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /T (pw) /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
+        "<< /T (pw2) /V null /Parent 2 0 R /Kids [5 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Ff 0 /Parent 4 0 R /Rect [0 30 100 50] >>".into(),
+    ]);
+    doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"TU".to_vec(), Object::String(PdfString::literal(vec![b' '; crate::read::MAX_TEXT_BYTES]))))
+        .unwrap();
+    assert_eq!(read(&doc), ["grp.pw"], "the second password field is left out");
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert_eq!((own_value(&doc, 2), own_value(&doc, 3)), (None, None), "a password field left out, and its widget, don't keep the value");
+    // A field left out with a value of its own doesn't inherit the ancestor's, whatever its kind,
+    // under a parent with the flag or one without.
+    for (parent, kid) in [(" /Ff 8192", " /Ff 0"), ("", "")] {
+        let mut doc = document(&[
+            "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+            format!("<< /T (grp) /FT /Tx{parent} /V (secret) /Kids [3 0 R 4 0 R] >>"),
+            "<< /Type /Annot /Subtype /Widget /T (pw) /Ff 8192 /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
+            format!("<< /Type /Annot /Subtype /Widget /T (plain){kid} /V () /Parent 2 0 R /Rect [0 30 100 50] >>"),
+        ]);
+        doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"TU".to_vec(), Object::String(PdfString::literal(vec![b' '; crate::read::MAX_TEXT_BYTES]))))
+            .unwrap();
+        assert_eq!(read(&doc), ["grp.pw"], "{parent:?}: the plain field is left out");
+        assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+        assert_eq!((own_value(&doc, 2), own_value(&doc, 3)), (None, None), "{parent:?}: no field left out inherits the value");
+    }
 }
 
 /// #4018: a value that doesn't fit its box at the field's font size is reported (it is drawn cut
