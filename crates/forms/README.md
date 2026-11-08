@@ -41,16 +41,19 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
 
 - Inheritable attributes (`/FT`, `/Ff`, `/V`, `/DV`, `/DA`, `/Q`, `/MaxLen`) are resolved down the
   field tree; the form's `/DA` and `/Q` are the last fallback.
-- A reading of the form (`fields`) keeps at most 64 MiB of field values, 64 MiB of scripts and
-  256 MiB of the rest of the fields' text (full names, `/DA`, options, tooltips, captions, widget
-  states, button actions), however many fields name or inherit the same string or stream. Past
-  that, a value or script reads as none (a list of values too, when one of them doesn't fit), and a
-  field whose own text doesn't fit is left out of the reading whole, never read with part of it, as
-  is one that would draw with a `/DA` that doesn't fit; its widgets go to a later field that lists
-  them. `fields_with_adopted` counts the fields left out (`Fields::left_out`): opening the file
-  records them as a repair, and redaction refuses to remove a widget no field read owns. Clear
-  form (`reset`) leaves a field whose default the reading didn't reach as it is, rather than
-  emptying it.
+- A reading of the form (`fields`) keeps at most 64 MiB of field values, 64 MiB more of the values
+  of text fields with the Password flag, 64 MiB of scripts and 256 MiB of the rest of the fields'
+  text (full names, `/DA`, options, tooltips, captions, widget states, button actions), however
+  many fields name or inherit the same string or stream. Past that, a value or script reads as
+  none (a list of values too, when one of them doesn't fit), and a field whose own text doesn't fit
+  is left out of the reading whole, never read with part of it, as is one that would draw with a
+  `/DA` that doesn't fit; its widgets go to a later field that lists them. `fields_with_adopted`
+  counts the fields left out (`Fields::left_out`): opening the file records them as a repair, and
+  redaction refuses to remove a widget no field read owns. Clear form (`reset`) leaves a field
+  whose default the reading didn't reach as it is, rather than emptying it. A save still clears a
+  password value the reading didn't reach (`clear_password_values`), and refuses, so writes no
+  file, when such a value is in a field the reading left out; the open document doesn't keep a
+  password value the reading didn't reach after a save.
   `field_actions`, `document_scripts` and renaming a field read within the same allowances;
   `field_actions` lists an action whose script or text doesn't fit as an action of another type,
   which `set_field_actions` keeps as it is.

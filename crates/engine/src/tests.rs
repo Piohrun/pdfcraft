@@ -2700,6 +2700,57 @@ fn a_typed_password_value_survives_save_and_mark_saved() {
     assert!(!appears_in_pdf(&s.save_bytes(id).unwrap(), "hunter2"), "the next save still omits it");
 }
 
+/// A one-page form: `n` text fields with `entry` set to one string, by reference, that takes
+/// 1 MiB of a reading's allowance for each copy, then a text widget with the Password flag
+/// (`pw`, with `rest`), the page's one annotation.
+fn password_after_shared_text(n: usize, entry: &str, rest: &str) -> Vec<u8> {
+    let fields_list: String = (0..=n).map(|i| format!("{} 0 R ", i + 6)).collect();
+    let mut objs = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [{fields_list}] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 4 0 R >> >> >> >>"),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [{} 0 R] >>", n + 6),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        format!("({})", "x".repeat((1 << 20) - std::mem::size_of::<String>())),
+    ];
+    objs.extend((0..n).map(|i| format!("<< /FT /Tx /T (f{i}) /{entry} 5 0 R >>")));
+    objs.push(format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (pw) /Ff 8192{rest} /Rect [20 250 180 270] /P 3 0 R >>"));
+    pdf_of(&objs)
+}
+
+/// #6175 review: 65 text fields whose values are one long string spend what a reading of the
+/// form copies of values; a value typed into a text field with the Password flag after them is
+/// still found, so neither Save nor a recovery snapshot writes it, and the open document keeps
+/// it after the save.
+#[test]
+fn a_typed_password_past_the_other_values_is_written_to_no_file() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(password_after_shared_text(65, "V", "")), None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "pw".into(), value: FieldValue::Text("hunter2".into()) }).unwrap();
+    assert!(appears_in_pdf(&s.get(id).unwrap().bytes, "hunter2"), "the working bytes hold it");
+    let saved = s.save_bytes(id).unwrap();
+    assert!(!appears_in_pdf(&saved, "hunter2"), "Save");
+    let snaps = s.autosave_snapshots();
+    assert_eq!(snaps.len(), 1);
+    assert!(!appears_in_pdf(&snaps[0].bytes, "hunter2"), "the recovery snapshot");
+    s.mark_saved(id, saved, Some("saved.pdf".into())).unwrap();
+    let value = s.get(id).unwrap().form.iter().find(|f| f.name == "pw").map(|f| f.value.clone());
+    assert_eq!(value, Some(vec!["hunter2".to_string()]), "the open document keeps it");
+}
+
+/// #6175 review: a text field with the Password flag that a reading of the form leaves out,
+/// behind 256 fields whose tooltips are one long string, can't be cleared through the fields read:
+/// Save refuses rather than write its value, and no recovery snapshot is written.
+#[test]
+fn a_password_field_the_form_reading_leaves_out_stops_save() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(password_after_shared_text(256, "TU", " /TU 5 0 R /V (hunter2)")), None).unwrap();
+    assert!(s.get(id).unwrap().form.iter().all(|f| f.name != "pw"), "the field is left out");
+    s.apply(id, Edit::SetFieldValue { name: "f0".into(), value: FieldValue::Text("typed".into()) }).unwrap();
+    let refused = s.save_bytes(id).unwrap_err().to_string();
+    assert!(refused.contains("isn't written"), "{refused}");
+    assert!(s.autosave_snapshots().is_empty(), "no recovery snapshot");
+}
+
 /// #3926 / #3943 review: signing writes the signed file from the same copy a save does, so a
 /// typed Password-field value is not signed into the file either.
 #[test]

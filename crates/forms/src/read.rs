@@ -417,7 +417,7 @@ fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Allowa
 
 /// The field values (`/V`, `/DV`: strings and names by their text, text streams by what they
 /// decode to) one reading of the form may copy in all, however many fields name the same value
-/// or inherit it.
+/// or inherit it. Text fields with the Password flag have as much again of their own.
 pub(crate) const MAX_VALUE_BYTES: usize = 64 << 20;
 
 /// A field's value or default value (`/V`, `/DV`), copied against `budget`. A value that doesn't
@@ -584,8 +584,19 @@ pub struct Fields {
 
 /// Read all terminal fields and the page-only adoption count in one enumeration.
 pub fn fields_with_adopted(doc: &Document) -> Fields {
-    let (items, adopted_page_fields, left_out) = enumerate(doc);
+    let Reading { items, adopted_page_fields, left_out, .. } = enumerate(doc);
     Fields { items, adopted_page_fields, left_out }
+}
+
+/// One reading of the form: [`Fields`], with the dictionaries of the fields it left out.
+pub(crate) struct Reading {
+    pub(crate) items: Vec<Field>,
+    pub(crate) adopted_page_fields: usize,
+    pub(crate) left_out: usize,
+    /// The fields left out, and the fields and widgets under them: a save can't clear what they
+    /// hold through the fields read. A widget a later field read lists too is among them, as its
+    /// `/Parent` may still be the field left out.
+    pub(crate) unread: Vec<ObjRef>,
 }
 
 #[cfg(test)]
@@ -600,7 +611,7 @@ pub(crate) fn form_reads() -> usize {
     FORM_READS.with(std::cell::Cell::get)
 }
 
-pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize, usize) {
+pub(crate) fn enumerate(doc: &Document) -> Reading {
     #[cfg(test)]
     FORM_READS.with(|n| n.set(n.get() + 1));
     let af = acroform(doc);
@@ -622,9 +633,11 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize, usize) {
         widgets: std::collections::HashSet::new(),
         withheld: std::collections::HashSet::new(),
         left_out: 0,
+        left_out_fields: Vec::new(),
         withheld_arrays: std::collections::HashMap::new(),
         scripts: script_budget(),
         values: Allowance::new(MAX_VALUE_BYTES),
+        passwords: Allowance::new(MAX_VALUE_BYTES),
         text: Allowance::new(MAX_TEXT_BYTES),
         pages: pages.iter().enumerate().map(|(i, p)| (*p, i)).collect(),
     };
@@ -647,7 +660,8 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize, usize) {
     adopt_page_fields(doc, &pages, &base, &page_of, &mut seen, &mut out);
     let adopted = out.len() - listed;
     rank_tabs(doc, &pages, &annot_index, &mut out);
-    (out, adopted, seen.left_out)
+    let unread = seen.left_out_fields.into_iter().chain(seen.withheld).collect();
+    Reading { items: out, adopted_page_fields: adopted, left_out: seen.left_out, unread }
 }
 
 /// Widget annotations no `/Fields` entry reaches are adopted as fields, as Acrobat and the
@@ -731,12 +745,17 @@ struct Seen {
     withheld: std::collections::HashSet<ObjRef>,
     /// Fields left out of the reading for text that didn't fit ([`Fields::left_out`]).
     left_out: usize,
+    /// The dictionaries of those fields, or of the fields above them that the text was in.
+    left_out_fields: Vec<ObjRef>,
     /// The `/Kids` arrays given by reference that [`withhold_below`] has read, by each reference on
     /// the way to them, and whether each holds a named kid; a chain that ends nowhere, by its first
     /// reference, as holding none.
     withheld_arrays: std::collections::HashMap<ObjRef, bool>,
     scripts: Allowance,
     values: Allowance,
+    /// The values of text fields with the Password flag, apart from the rest: other fields can't
+    /// spend what a save needs to find and clear them, or the open document to keep them.
+    passwords: Allowance,
     /// A field whose text doesn't fit is left out of the reading whole: a field read without
     /// its `/DA` or options would be drawn and checked as another field.
     text: Allowance,
@@ -870,6 +889,7 @@ fn walk(
     if seen.text.refusals() != refusals {
         let fields = withhold_below(doc, r, seen).max(1);
         seen.left_out = seen.left_out.saturating_add(fields);
+        seen.left_out_fields.push(r);
         return;
     }
     if let Some(o) = d.get(b"DA") {
@@ -917,6 +937,7 @@ fn walk(
     if inh.da_refused && kind != FieldKind::Signature {
         seen.withheld.extend(claimed);
         seen.left_out = seen.left_out.saturating_add(1);
+        seen.left_out_fields.push(r);
         return;
     }
     let refusals = seen.text.refusals();
@@ -994,15 +1015,17 @@ fn walk(
     if text.refusals() != refusals {
         seen.withheld.extend(claimed);
         seen.left_out = seen.left_out.saturating_add(1);
+        seen.left_out_fields.push(r);
         return;
     }
     seen.widgets.extend(claimed);
+    let values = if kind == FieldKind::Text && ff & flags::PASSWORD != 0 { &mut seen.passwords } else { &mut seen.values };
     out.push(Field {
         name: inh.name.to_string(),
         obj: r,
         kind,
-        value: values_of(doc, inh.v.as_deref().and_then(Object::as_dict).and_then(|f| f.get(b"V")), &mut seen.values),
-        default: values_of(doc, inh.dv.as_deref().and_then(Object::as_dict).and_then(|f| f.get(b"DV")), &mut seen.values),
+        value: values_of(doc, inh.v.as_deref().and_then(Object::as_dict).and_then(|f| f.get(b"V")), values),
+        default: values_of(doc, inh.dv.as_deref().and_then(Object::as_dict).and_then(|f| f.get(b"DV")), values),
         flags: ff,
         max_len: inh.max_len,
         options,

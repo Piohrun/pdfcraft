@@ -63,7 +63,7 @@ fn reopen(doc: &Document) -> Document {
 }
 
 fn legacy_two_call_enumeration(doc: &Document) -> (Vec<Field>, usize) {
-    (enumerate(doc).0, enumerate(doc).1)
+    (enumerate(doc).items, enumerate(doc).adopted_page_fields)
 }
 
 fn assert_combined_matches_legacy(doc: &Document, adopted: usize) {
@@ -5397,6 +5397,125 @@ fn a_page_widget_inheriting_password_flag_beyond_depth_32_is_recognized() {
     assert!(has_password_values(&doc));
     assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
     assert!(!has_password_values(&doc));
+}
+
+/// A form of `n` text fields, with `flags`, whose values are one string, by reference, of
+/// `1 MiB - size_of::<String>()` bytes: each copy of it takes 1 MiB of an allowance, and 64 take
+/// all of it. Then a text widget with the Password flag that holds `secret`, object `n + 3`, on
+/// the one page.
+fn password_after_shared_values(n: usize, flags: &str) -> Document {
+    let fields_list: String = (0..=n).map(|i| format!("{} 0 R ", i + 3)).collect();
+    let (pw, pages) = (n + 3, n + 4);
+    let mut objs = vec![
+        format!("<< /Type /Catalog /Pages {pages} 0 R /AcroForm << /Fields [{fields_list}] /DA (/Helv 0 Tf 0 g) >> >>"),
+        format!("({})", "x".repeat((1 << 20) - std::mem::size_of::<String>())),
+    ];
+    objs.extend((0..n).map(|i| format!("<< /FT /Tx /T (f{i}){flags} /V 2 0 R >>")));
+    objs.push(format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (pw) /Ff 8192 /V (secret) /Rect [0 0 100 20] /P {} 0 R >>", pages + 1));
+    objs.push(format!("<< /Type /Pages /Kids [{} 0 R] /Count 1 /MediaBox [0 0 600 800] >>", pages + 1));
+    objs.push(format!("<< /Type /Page /Parent {pages} 0 R /Annots [{pw} 0 R] >>"));
+    document(&objs)
+}
+
+/// The text of object `num`'s own `/V`, as stored.
+fn own_value(doc: &Document, num: u32) -> Option<String> {
+    let obj = doc.get(ObjRef::new(num, 0));
+    obj.as_dict().and_then(|d| d.get(b"V")).and_then(|v| doc.resolve(v).as_string().map(PdfString::to_text))
+}
+
+/// #6175 review: ordinary fields that spend the value allowance leave a text field with the
+/// Password flag an allowance of its own. Its value is still found, so a save takes it out of the
+/// file, and the open document keeps it.
+#[test]
+fn a_password_value_is_read_apart_from_the_other_fields_values() {
+    let doc = password_after_shared_values(65, "");
+    assert!(fields(&doc)[64].value.is_empty(), "the 65th ordinary value is past the allowance");
+    assert_eq!(password_values(&doc), [("pw".to_string(), "secret".to_string())], "kept for the open document");
+    let mut copy = doc.clone();
+    assert_eq!((has_password_values(&doc), clear_password_values(&mut copy).unwrap()), (true, 1));
+    assert_eq!(own_value(&reopen(&copy), 68), None, "the saved file holds no value");
+}
+
+/// #6175 review: a value past even the password fields' own allowance isn't known to be empty,
+/// so a save clears it all the same: 64 such fields sharing one long value spend the allowance,
+/// and the next one's `secret` is still taken out of the file. The open document doesn't keep a
+/// value it didn't read.
+#[test]
+fn a_password_value_past_its_own_allowance_is_still_cleared() {
+    let doc = password_after_shared_values(64, " /Ff 8192");
+    assert!(fields(&doc)[64].value.is_empty(), "past the allowance");
+    let mut copy = doc.clone();
+    assert_eq!((has_password_values(&doc), clear_password_values(&mut copy).unwrap()), (true, 65));
+    let saved = reopen(&copy);
+    assert!((3..=67).all(|n| own_value(&saved, n).is_none()), "every value is cleared");
+    assert_eq!(password_values(&doc).len(), 64, "the value not read isn't kept");
+}
+
+/// #6175 review: a text field with the Password flag that the reading leaves out, its text past
+/// the allowance, can't be cleared through the fields read, so a save refuses rather than write
+/// its value: the field's own, inherited, or on a widget of its own, the field left out for its
+/// own text, its `/DA`, its own name or its parent's name, with a widget of its own or none. One
+/// that holds no value, or a field left out without the flag or of another type, doesn't stop the
+/// save. Each form has another password field, read and empty, so none is passed over for having
+/// no field with the flag.
+#[test]
+fn a_password_field_left_out_of_the_reading_stops_the_save() {
+    let long = |byte: u8| Object::String(PdfString::literal(vec![byte; crate::read::MAX_TEXT_BYTES]));
+    // A parent (2) whose field (3) has a widget of its own (4) or none, and the other field (5).
+    let form = |parent: &str, field: &str, widget: Option<&str>| {
+        document(&[
+            "<< /Type /Catalog /AcroForm << /Fields [2 0 R 5 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+            format!("<< /T (p){parent} /Kids [3 0 R] >>"),
+            format!("<< /T (pw) /Parent 2 0 R{field}{} >>", if widget.is_some() { " /Kids [4 0 R]" } else { "" }),
+            widget.map_or("null".into(), |w| format!("<< /Type /Annot /Subtype /Widget /Parent 3 0 R /Rect [0 0 100 20]{w} >>")),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (other) /Ff 8192 /Rect [0 30 100 50] >>".into(),
+        ])
+    };
+    let password = " /FT /Tx /Ff 8192";
+    let cases = [
+        ("its own value", form("", &format!("{password} /V (secret)"), Some("")), true),
+        ("its own value and no widget", form("", &format!("{password} /V (secret)"), None), true),
+        ("an inherited value", form(" /V (secret)", password, Some("")), true),
+        ("a widget's value", form("", password, Some(" /V (secret)")), true),
+        ("no value", form("", password, Some("")), false),
+        ("no Password flag", form("", " /FT /Tx /Ff 4096 /V (secret)", Some("")), false),
+        ("a choice field", form("", " /FT /Ch /Ff 8192 /V (secret)", Some("")), false),
+    ];
+    for (what, doc, refused) in cases {
+        let ways = [("for its tooltip", &b"TU"[..], 3), ("for its /DA", b"DA", 3), ("for its name", b"T", 3), ("for its parent's name", b"T", 2)];
+        for (left_out, entry, num) in ways {
+            let mut doc = doc.clone();
+            doc.update_dict(ObjRef::new(num, 0), |d| d.set(entry.to_vec(), long(b'n'))).unwrap();
+            assert_eq!(fields(&doc).into_iter().map(|f| f.name).collect::<Vec<_>>(), ["other"], "{what}, {left_out}: left out");
+            assert_eq!(has_password_values(&doc), refused, "{what}, {left_out}");
+            match clear_password_values(&mut doc) {
+                Err(FormError::Invalid(e)) if refused => assert!(e.contains("isn't written"), "{e}"),
+                Ok(0) if !refused => {}
+                other => panic!("{what}, {left_out}: {other:?}"),
+            }
+        }
+    }
+}
+
+/// #6175 review: an ancestor's value that a password field shares with a field the reading left
+/// out stays for that field: only the fields read are known, so the password field gets an empty
+/// value of its own instead.
+#[test]
+fn a_value_shared_with_a_field_left_out_stays() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+        "<< /T (grp) /FT /Tx /V (shared) /Kids [3 0 R 4 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /T (pw) /Ff 8192 /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /T (plain) /Parent 2 0 R /Rect [0 30 100 50] >>".into(),
+    ]);
+    let read = |doc: &Document| fields_with_adopted(doc).items.into_iter().map(|f| f.name).collect::<Vec<_>>();
+    assert_eq!(read(&doc), ["grp.pw", "grp.plain"]);
+    doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"TU".to_vec(), Object::String(PdfString::literal(vec![b' '; crate::read::MAX_TEXT_BYTES]))))
+        .unwrap();
+    assert_eq!(read(&doc), ["grp.pw"], "the plain field is left out");
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert_eq!(own_value(&doc, 2).as_deref(), Some("shared"), "the shared value stays");
+    assert_eq!(own_value(&doc, 3).as_deref(), Some(""), "the password field's own, empty");
 }
 
 /// #4018: a value that doesn't fit its box at the field's font size is reported (it is drawn cut
