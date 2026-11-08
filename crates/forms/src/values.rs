@@ -539,19 +539,23 @@ fn password_fields(doc: &Document, read: &[Field]) -> Vec<Field> {
     read.iter().filter(|f| is_password(f) && (typed(f) || unread(f) || on_widget(f))).cloned().collect()
 }
 
-/// Whether a field the reading left out, or a field or widget under one (`unread`, see
-/// [`Reading::unread`]), is a text field with the Password flag and holds a value (`/V`): the
-/// type and the value its own or inherited, and the flag set by it or by a field above it (a kid
-/// clearing the flag again only makes the answer cautious, as in [`has_password_flag`]). A save
-/// can't clear such a value through the fields read. A value equal to the default counts too:
-/// comparing them could copy a long value once for each such field.
-fn left_out_password_value(doc: &Document, unread: &[ObjRef]) -> bool {
+/// Whether the field or widget `chain` starts at, with the fields above it ([`field_chain`]), is a
+/// text field with the Password flag: the type its own or inherited, and the flag set by it or by
+/// a field above it (a kid clearing the flag again only makes the answer cautious, as in
+/// [`has_password_flag`]).
+fn password_text(doc: &Document, chain: &[ObjRef]) -> bool {
     let sets_it = |r: &ObjRef| doc.get(*r).as_dict().and_then(|d| field_flags(doc, d)).is_some_and(|ff| ff & flags::PASSWORD != 0);
-    unread.iter().any(|r| {
-        let chain = field_chain(doc, *r);
-        let text = chain.iter().find_map(|a| doc.get(*a).as_dict().and_then(|d| d.name(b"FT").map(|t| t == b"Tx")));
-        text == Some(true) && chain.iter().any(sets_it) && unread_value(doc, *r, b"V")
-    })
+    let text = chain.iter().find_map(|a| doc.get(*a).as_dict().and_then(|d| d.name(b"FT").map(|t| t == b"Tx")));
+    text == Some(true) && chain.iter().any(sets_it)
+}
+
+/// Whether a field the reading left out, or a field or widget under one (`unread`, see
+/// [`Reading::unread`]), is a text field with the Password flag ([`password_text`]) and holds a
+/// value (`/V`, its own or inherited). A save can't clear such a value through the fields read. A
+/// value equal to the default counts too: comparing them could copy a long value once for each
+/// such field.
+fn left_out_password_value(doc: &Document, unread: &[ObjRef]) -> bool {
+    unread.iter().any(|r| password_text(doc, &field_chain(doc, *r)) && unread_value(doc, *r, b"V"))
 }
 
 /// Whether any field dictionary sets the Password flag (#3943 review). A field that inherits the
@@ -636,7 +640,7 @@ fn field_chain(doc: &Document, r: ObjRef) -> Vec<ObjRef> {
 ///
 /// A value can sit on the field, on one of its widgets, or on an ancestor it inherits from
 /// (`/V` is inheritable). Each is removed; an ancestor's only when every field inheriting from it
-/// is such a password field, and none the reading left out is under it. Where an ancestor's value
+/// is such a password field, and no field the reading left out other than one is under it. Where an ancestor's value
 /// is shared with other fields and stays, the
 /// password field gets an empty value of its own so it no longer inherits it. Returns how many
 /// fields were cleared.
@@ -658,9 +662,11 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
     // Each field's ancestors, found once: only values change below, never `/Parent` (#3943
     // review: walking them again for every ancestor of every target was quadratic).
     let chains: Vec<(bool, Vec<ObjRef>)> = reading.items.iter().map(|g| (is_password(g), field_chain(doc, g.obj))).collect();
-    // The fields above those the reading left out: a value one of them carries may be inherited by
-    // a field that isn't read.
-    let above_unread: std::collections::HashSet<ObjRef> = reading.unread.iter().flat_map(|r| field_chain(doc, *r)).collect();
+    // The fields above those the reading left out other than password fields: a value one of them
+    // carries may be another field's, which isn't read. A password field left out that inherits it
+    // has already stopped the save.
+    let above_unread: std::collections::HashSet<ObjRef> =
+        reading.unread.iter().map(|r| field_chain(doc, *r)).filter(|chain| !password_text(doc, chain)).flatten().collect();
     for f in &targets {
         let chain = field_chain(doc, f.obj);
         for w in &f.widgets {

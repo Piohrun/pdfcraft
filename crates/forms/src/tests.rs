@@ -5499,8 +5499,9 @@ fn a_password_field_left_out_of_the_reading_stops_the_save() {
 
 /// #6175 review: an ancestor's value that a password field shares with a field the reading left
 /// out stays for that field: only the fields read are known, so the password field gets an empty
-/// value of its own instead. A field left out elsewhere in the form doesn't keep the value of an
-/// ancestor only password fields inherit from.
+/// value of its own instead. A field left out elsewhere in the form, or a password field left out
+/// under it with a value of its own, doesn't keep the value of an ancestor only password fields
+/// inherit from.
 #[test]
 fn a_value_shared_with_a_field_left_out_under_it_stays() {
     let mut doc = document(&[
@@ -5528,6 +5529,19 @@ fn a_value_shared_with_a_field_left_out_under_it_stays() {
     assert_eq!(read(&doc), ["grp.pw"], "the other field is left out");
     assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
     assert_eq!((own_value(&doc, 2), own_value(&doc, 3)), (None, None), "the ancestor's value is the password field's alone");
+    // Nor does a password field left out under it that holds a value of its own, which it doesn't
+    // inherit.
+    let mut doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+        "<< /T (grp) /FT /Tx /Ff 8192 /V (secret) /Kids [3 0 R 4 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /T (pw) /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /T (pw2) /Parent 2 0 R /V () /Rect [0 30 100 50] >>".into(),
+    ]);
+    doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"TU".to_vec(), Object::String(PdfString::literal(vec![b' '; crate::read::MAX_TEXT_BYTES]))))
+        .unwrap();
+    assert_eq!(read(&doc), ["grp.pw"], "the second password field is left out");
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert_eq!((own_value(&doc, 2), own_value(&doc, 3)), (None, None), "the ancestor's value is the password fields' alone");
 }
 
 /// #4018: a value that doesn't fit its box at the field's font size is reported (it is drawn cut
