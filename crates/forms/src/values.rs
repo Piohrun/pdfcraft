@@ -636,7 +636,8 @@ fn field_chain(doc: &Document, r: ObjRef) -> Vec<ObjRef> {
 ///
 /// A value can sit on the field, on one of its widgets, or on an ancestor it inherits from
 /// (`/V` is inheritable). Each is removed; an ancestor's only when every field inheriting from it
-/// is such a password field. Where an ancestor's value is shared with other fields and stays, the
+/// is such a password field, and none the reading left out is under it. Where an ancestor's value
+/// is shared with other fields and stays, the
 /// password field gets an empty value of its own so it no longer inherits it. Returns how many
 /// fields were cleared.
 ///
@@ -657,6 +658,9 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
     // Each field's ancestors, found once: only values change below, never `/Parent` (#3943
     // review: walking them again for every ancestor of every target was quadratic).
     let chains: Vec<(bool, Vec<ObjRef>)> = reading.items.iter().map(|g| (is_password(g), field_chain(doc, g.obj))).collect();
+    // The fields above those the reading left out: a value one of them carries may be inherited by
+    // a field that isn't read.
+    let above_unread: std::collections::HashSet<ObjRef> = reading.unread.iter().flat_map(|r| field_chain(doc, *r)).collect();
     for f in &targets {
         let chain = field_chain(doc, f.obj);
         for w in &f.widgets {
@@ -674,8 +678,7 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
             if doc.get(*a).as_dict().is_none_or(|d| d.get(b"V").is_none()) {
                 continue;
             }
-            // Only the fields read are known: one left out may inherit the value too.
-            let exclusive = reading.left_out == 0 && chains.iter().filter(|(_, chain)| chain.contains(a)).all(|(password, _)| *password);
+            let exclusive = !above_unread.contains(a) && chains.iter().filter(|(_, chain)| chain.contains(a)).all(|(password, _)| *password);
             if exclusive {
                 doc.update_dict(*a, |d| {
                     d.remove(b"V");

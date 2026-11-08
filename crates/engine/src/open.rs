@@ -329,7 +329,8 @@ impl Session {
             })
             .unwrap_or_default();
         // Fields whose text is past what a reading of the form takes are left out of the form
-        // shown, and redaction refuses the file; it says so.
+        // shown, redaction refuses a mark over a widget no field read owns, and a save refuses
+        // when a password field among them holds a value; the file says so.
         if left_out > 0
             && let Some(e) = &mut editor
         {

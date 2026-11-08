@@ -51,9 +51,11 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   counts the fields left out (`Fields::left_out`): opening the file records them as a repair, and
   redaction refuses to remove a widget no field read owns. Clear form (`reset`) leaves a field
   whose default the reading didn't reach as it is, rather than emptying it. A save still clears a
-  password value the reading didn't reach (`clear_password_values`), and refuses, so writes no
-  file, when such a value is in a field the reading left out; the open document doesn't keep a
-  password value the reading didn't reach after a save.
+  password value past the reading's allowances (`clear_password_values`), and refuses, so writes
+  no file, when such a value is in a field the reading left out; the open document doesn't keep a
+  password value past them after a save. A password field the reading doesn't read at all, as on
+  `main` (one whose `/FT` is given by reference, or nested past 64 levels), keeps its value in the
+  files written.
   `field_actions`, `document_scripts` and renaming a field read within the same allowances;
   `field_actions` lists an action whose script or text doesn't fit as an action of another type,
   which `set_field_actions` keeps as it is.
