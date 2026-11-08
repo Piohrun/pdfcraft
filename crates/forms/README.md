@@ -54,10 +54,11 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   password value past the reading's allowances (`clear_password_values`), and refuses, so writes
   no file, when such a value is in a field the reading left out; the open document doesn't keep a
   password value past them after a save. A password value the reading doesn't see stays in the
-  files written, as on `main`: for example that of a field whose `/FT` is given by reference (read
-  with the type a field above it gives directly, or not read) or that is nested past 64 levels, a
-  value of the text "Off", which reads as none, a parent's value under a kid whose `/V` is null,
-  which the reading takes for no value, and a value 64 levels above a password field.
+  files written, as on `main`: for example that of a field whose `/FT` is given by reference,
+  unless a field above it gives `/Tx` directly, or that is nested past 64 levels, a value of the
+  text "Off", which reads as none, a parent's value under a kid whose `/V` is null, which the
+  reading takes for no value, a value 64 levels above a password field, and a parent's value a
+  password field inherits when another field read under it has a value of its own.
   `field_actions`, `document_scripts` and renaming a field read within the same allowances;
   `field_actions` lists an action whose script or text doesn't fit as an action of another type,
   which `set_field_actions` keeps as it is.

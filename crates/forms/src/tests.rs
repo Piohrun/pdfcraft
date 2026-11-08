@@ -5477,6 +5477,7 @@ fn a_password_field_left_out_of_the_reading_stops_the_save() {
         ("its own value and no widget", form("", &format!("{password} /V (secret)"), None), true),
         ("an inherited value", form(" /V (secret)", password, Some("")), true),
         ("a widget's value", form("", password, Some(" /V (secret)")), true),
+        ("a widget's value under a type of its own", form("", password, Some(" /FT /Ch /V (secret)")), true),
         ("no value", form("", password, Some("")), false),
         ("no Password flag", form("", " /FT /Tx /Ff 4096 /V (secret)", Some("")), false),
         ("a choice field", form("", " /FT /Ch /Ff 8192 /V (secret)", Some("")), false),
@@ -5587,6 +5588,26 @@ fn a_value_shared_with_a_field_left_out_under_it_stays() {
         assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
         assert_eq!((own_value(&doc, 2), own_value(&doc, 3)), (None, None), "{parent:?}: no field left out inherits the value");
     }
+}
+
+/// #6175 review: a field left out for its name whose kids are fields holds no value a field
+/// shows: its fields, left out with it, are looked at themselves. A password field under it with a
+/// value of its own doesn't keep the value of an ancestor only password fields inherit from.
+#[test]
+fn a_field_left_out_above_others_keeps_no_value_for_them() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+        "<< /T (grp) /V (secret) /Kids [3 0 R 4 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /T (pw) /FT /Tx /Ff 8192 /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
+        "<< /T (mid) /Parent 2 0 R /Kids [5 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /T (leaf) /FT /Tx /Ff 8192 /V () /Parent 4 0 R /Rect [0 30 100 50] >>".into(),
+    ]);
+    doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"T".to_vec(), Object::String(PdfString::literal(vec![b'n'; crate::read::MAX_TEXT_BYTES]))))
+        .unwrap();
+    let read = fields_with_adopted(&doc);
+    assert_eq!((read.items.into_iter().map(|f| f.name).collect::<Vec<_>>(), read.left_out), (vec!["grp.pw".to_string()], 1));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert_eq!((own_value(&doc, 2), own_value(&doc, 3)), (None, None), "the ancestor's value is the password fields' alone");
 }
 
 /// #4018: a value that doesn't fit its box at the field's font size is reported (it is drawn cut

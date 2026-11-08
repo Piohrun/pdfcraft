@@ -539,28 +539,35 @@ fn password_fields(doc: &Document, read: &[Field]) -> Vec<Field> {
     read.iter().filter(|f| is_password(f) && (typed(f) || unread(f) || on_widget(f))).cloned().collect()
 }
 
+/// Whether `r` is a field rather than a separate widget (a node with a `/Parent` and no `/T`),
+/// whose own `/FT` and `/Ff` the reading doesn't read.
+fn is_field(doc: &Document, r: &ObjRef) -> bool {
+    doc.get(*r).as_dict().is_some_and(|d| d.contains(b"T") || !d.contains(b"Parent"))
+}
+
+/// The type of the nearest field on `chain` that gives one: whether it is `Tx`. `/FT` only when
+/// direct, as the reading reads it: one given by reference leaves the type above it in place here
+/// as there.
+fn text_type(doc: &Document, chain: &[ObjRef]) -> Option<bool> {
+    chain.iter().filter(|a| is_field(doc, a)).find_map(|a| doc.get(*a).as_dict().and_then(|d| d.name(b"FT").map(|t| t == b"Tx")))
+}
+
 /// Whether the field or widget `chain` starts at, with the fields above it ([`field_chain`]), is a
-/// text field with the Password flag: the type its own or inherited, and the flag set by it or by
-/// a field above it (a kid clearing the flag again only makes the answer cautious, as in
-/// [`has_password_flag`]).
+/// text field with the Password flag: the type its field's own or inherited ([`text_type`]), and
+/// the flag set by it or by a field above it (a kid clearing the flag again only makes the answer
+/// cautious, as in [`has_password_flag`]).
 fn password_text(doc: &Document, chain: &[ObjRef]) -> bool {
     let sets_it = |r: &ObjRef| doc.get(*r).as_dict().and_then(|d| field_flags(doc, d)).is_some_and(|ff| ff & flags::PASSWORD != 0);
-    // `/FT` only when direct, as the reading reads it: one given by reference leaves the type
-    // above it in place here as there.
-    let text = chain.iter().find_map(|a| doc.get(*a).as_dict().and_then(|d| d.name(b"FT").map(|t| t == b"Tx")));
-    text == Some(true) && chain.iter().any(sets_it)
+    text_type(doc, chain) == Some(true) && chain.iter().any(sets_it)
 }
 
 /// Whether the field `chain` starts at ([`field_chain`]) is read as a text field with the
-/// Password flag: the type and the flags of the nearest field that sets them, as the reading
-/// inherits them, a separate widget's own (a node with a `/Parent` and no `/T`) not counting. A kid
-/// that clears the flag isn't a password field here, unlike in [`password_text`].
+/// Password flag: the type ([`text_type`]) and the flags of the nearest field that sets them, as
+/// the reading inherits them, a separate widget's own not counting. A kid that clears the flag
+/// isn't a password field here, unlike in [`password_text`].
 fn read_as_password(doc: &Document, chain: &[ObjRef]) -> bool {
-    let field = |a: &&ObjRef| doc.get(**a).as_dict().is_some_and(|d| d.contains(b"T") || !d.contains(b"Parent"));
-    // `/FT` only when direct, as in [`password_text`].
-    let text = chain.iter().filter(field).find_map(|a| doc.get(*a).as_dict().and_then(|d| d.name(b"FT").map(|t| t == b"Tx")));
-    let ff = chain.iter().filter(field).find_map(|a| doc.get(*a).as_dict().and_then(|d| field_flags(doc, d)));
-    text == Some(true) && ff.is_some_and(|ff| ff & flags::PASSWORD != 0)
+    let ff = chain.iter().filter(|a| is_field(doc, a)).find_map(|a| doc.get(*a).as_dict().and_then(|d| field_flags(doc, d)));
+    text_type(doc, chain) == Some(true) && ff.is_some_and(|ff| ff & flags::PASSWORD != 0)
 }
 
 /// Whether a field the reading left out, or a field or widget under one (`unread`, see

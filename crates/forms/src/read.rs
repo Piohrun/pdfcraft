@@ -593,9 +593,10 @@ pub(crate) struct Reading {
     pub(crate) items: Vec<Field>,
     pub(crate) adopted_page_fields: usize,
     pub(crate) left_out: usize,
-    /// The fields left out, and the fields and widgets under them: a save can't clear what they
-    /// hold through the fields read. A widget a later field read lists too is among them, as its
-    /// `/Parent` may still be the field left out.
+    /// The fields left out, and the fields and widgets under them, but for those with a named kid,
+    /// whose fields are among them: a save can't clear what they hold through the fields read. A
+    /// widget a later field read lists too is among them, as its `/Parent` may still be the field
+    /// left out.
     pub(crate) unread: Vec<ObjRef>,
 }
 
@@ -634,6 +635,7 @@ pub(crate) fn enumerate(doc: &Document) -> Reading {
         withheld: std::collections::HashSet::new(),
         left_out: 0,
         left_out_fields: Vec::new(),
+        branches: std::collections::HashSet::new(),
         withheld_arrays: std::collections::HashMap::new(),
         scripts: script_budget(),
         values: Allowance::new(MAX_VALUE_BYTES),
@@ -660,7 +662,8 @@ pub(crate) fn enumerate(doc: &Document) -> Reading {
     adopt_page_fields(doc, &pages, &base, &page_of, &mut seen, &mut out);
     let adopted = out.len() - listed;
     rank_tabs(doc, &pages, &annot_index, &mut out);
-    let unread = seen.left_out_fields.into_iter().chain(seen.withheld).collect();
+    let branches = seen.branches;
+    let unread = seen.left_out_fields.into_iter().chain(seen.withheld).filter(|r| !branches.contains(r)).collect();
     Reading { items: out, adopted_page_fields: adopted, left_out: seen.left_out, unread }
 }
 
@@ -747,6 +750,8 @@ struct Seen {
     left_out: usize,
     /// The dictionaries of those fields, or of the fields above them that the text was in.
     left_out_fields: Vec<ObjRef>,
+    /// The nodes [`withhold_below`] found a named kid under, so fields of their own.
+    branches: std::collections::HashSet<ObjRef>,
     /// The `/Kids` arrays given by reference that [`withhold_below`] has read, by each reference on
     /// the way to them, and whether each holds a named kid; a chain that ends nowhere, by its first
     /// reference, as holding none.
@@ -815,7 +820,9 @@ fn withhold_below(doc: &Document, r: ObjRef, seen: &mut Seen) -> usize {
             Some(list) => withhold_kids(doc, list, seen, &mut stack),
             None => false,
         };
-        if d.contains(b"T") && !has_named {
+        if has_named {
+            seen.branches.insert(n);
+        } else if d.contains(b"T") {
             terminal = terminal.saturating_add(1);
         }
     }
