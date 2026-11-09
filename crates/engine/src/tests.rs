@@ -2859,7 +2859,7 @@ fn a_password_field_the_form_reading_leaves_out_stops_save() {
     assert!(s.get(id).unwrap().form.iter().all(|f| f.name != "pw"), "the field is left out");
     s.apply(id, Edit::SetFieldValue { name: "f0".into(), value: FieldValue::Text("typed".into()) }).unwrap();
     let refused = s.save_bytes(id).unwrap_err().to_string();
-    assert!(refused.contains("isn't written"), "{refused}");
+    assert!(refused.contains("isn't saved"), "{refused}");
     assert!(s.autosave_snapshots().is_empty(), "no recovery snapshot");
 }
 

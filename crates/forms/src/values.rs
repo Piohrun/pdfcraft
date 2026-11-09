@@ -808,7 +808,7 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
     let Some(Passwords { reading, holding: targets, incomplete }) = passwords(doc) else { return Ok(0) };
     if incomplete {
         return Err(FormError::Invalid(
-            "this form has a password field, and fields past the text one reading of it copies, so a password value can't be known cleared, and the file isn't written".into(),
+            "This form has more field text than PdfCraft reads (256 MiB) and a field with the Password flag, so it isn't saved: a password value could be among the fields PdfCraft didn't read. Export the form data (FDF or XFDF) to keep what you typed.".into(),
         ));
     }
     if targets.is_empty() {

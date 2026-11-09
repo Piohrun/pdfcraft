@@ -6302,7 +6302,7 @@ fn a_password_field_left_out_of_the_reading_stops_the_save() {
             assert_eq!(fields(&doc).into_iter().map(|f| f.name).collect::<Vec<_>>(), ["other"], "{what}, {left_out}: left out");
             assert!(has_password_values(&doc), "{what}, {left_out}");
             match clear_password_values(&mut doc) {
-                Err(FormError::Invalid(e)) => assert!(e.contains("isn't written"), "{e}"),
+                Err(FormError::Invalid(e)) => assert!(e.contains("isn't saved"), "{e}"),
                 other => panic!("{what}, {left_out}: {other:?}"),
             }
         }
