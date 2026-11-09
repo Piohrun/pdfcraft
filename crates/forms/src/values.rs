@@ -1,6 +1,6 @@
 use super::appearances::{declares_pdfa, need_appearances};
 use super::read::{
-    Reading, acroform, enumerate, field_flags, fields, held, listed_indices, listing_fields_named, page_refs, referred, selected_options,
+    Reading, Unread, acroform, enumerate, field_flags, fields, held, listed_indices, listing_fields_named, page_refs, referred, selected_options,
 };
 use super::{
     Dict, Document, Field, FieldEvent, FieldKind, FieldValue, FormError, NoScripts, ObjRef, Object, PdfString, Scripts, Widget, af, appearance,
@@ -702,45 +702,18 @@ fn password_fields(doc: &Document, read: &[Field]) -> Vec<Field> {
     read.iter().filter(|f| is_password(f) && (typed(f) || unread(f) || on_widget(f))).cloned().collect()
 }
 
-/// Whether `r` is a field rather than a separate widget (a node with no `/T` whose `/Parent` is a
-/// field), whose own `/FT` and `/Ff` the reading doesn't read. A `/Parent` naming a missing object
-/// is none, as the reading reads it: the widget is a field of its own.
-fn is_field(doc: &Document, r: &ObjRef) -> bool {
-    doc.get(*r).as_dict().is_some_and(|d| d.contains(b"T") || !d.get(b"Parent").is_some_and(|p| held(doc, p).as_dict().is_some()))
+/// Whether a field the reading left out, or a field or widget under one ([`Reading::unread`]), is a
+/// text field with the Password flag and holds a value, by the type, flags and `/V` the reading
+/// would have read for it (a widget's own `/V` included). A save can't clear such a value through
+/// the fields read. A value equal to the default counts too: comparing them could copy a long value
+/// once for each such field.
+fn left_out_password_value(doc: &Document, unread: &[Unread]) -> bool {
+    unread.iter().any(|u| u.password && u.value.is_some_and(|v| own_value_holds(doc, v)))
 }
 
-/// The type of the nearest field on `chain` that gives one: whether it is `Tx`. `/FT` only when
-/// direct, as the reading reads it: one given by reference leaves the type above it in place here
-/// as there.
-fn text_type(doc: &Document, chain: &[ObjRef]) -> Option<bool> {
-    chain.iter().filter(|a| is_field(doc, a)).find_map(|a| doc.get(*a).as_dict().and_then(|d| d.name(b"FT").map(|t| t == b"Tx")))
-}
-
-/// Whether the field or widget `chain` starts at, with the fields above it ([`field_chain`]), is a
-/// text field with the Password flag: the type its field's own or inherited ([`text_type`]), and
-/// the flag set by it or by a field above it (a kid clearing the flag again only makes the answer
-/// cautious, as in [`has_password_flag`]).
-fn password_text(doc: &Document, chain: &[ObjRef]) -> bool {
-    let sets_it = |r: &ObjRef| doc.get(*r).as_dict().and_then(|d| field_flags(doc, d)).is_some_and(|ff| ff & flags::PASSWORD != 0);
-    text_type(doc, chain) == Some(true) && chain.iter().any(sets_it)
-}
-
-/// Whether the field `chain` starts at ([`field_chain`]) is read as a text field with the
-/// Password flag: the type ([`text_type`]) and the flags of the nearest field that sets them, as
-/// the reading inherits them, a separate widget's own not counting. A kid that clears the flag
-/// isn't a password field here, unlike in [`password_text`].
-fn read_as_password(doc: &Document, chain: &[ObjRef]) -> bool {
-    let ff = chain.iter().filter(|a| is_field(doc, a)).find_map(|a| doc.get(*a).as_dict().and_then(|d| field_flags(doc, d)));
-    text_type(doc, chain) == Some(true) && ff.is_some_and(|ff| ff & flags::PASSWORD != 0)
-}
-
-/// Whether a field the reading left out, or a field or widget under one (`unread`, see
-/// [`Reading::unread`]), is a text field with the Password flag ([`password_text`]) and holds a
-/// value (`/V`, its own or inherited). A save can't clear such a value through the fields read. A
-/// value equal to the default counts too: comparing them could copy a long value once for each
-/// such field.
-fn left_out_password_value(doc: &Document, unread: &[ObjRef]) -> bool {
-    unread.iter().any(|r| password_text(doc, &field_chain(doc, *r)) && unread_value(doc, *r, b"V"))
+/// Whether field `r`'s own `/V` holds a value ([`holds_value`]).
+fn own_value_holds(doc: &Document, r: ObjRef) -> bool {
+    doc.get(r).as_dict().and_then(|d| d.get(b"V").map(|v| holds_value(doc, v))).unwrap_or(false)
 }
 
 /// Whether any field dictionary sets the Password flag (#3943 review). A field that inherits the
@@ -849,22 +822,10 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
     // Each field's ancestors, found once: only values change below, never `/Parent` (#3943
     // review: walking them again for every ancestor of every target was quadratic).
     let chains: Vec<(bool, Vec<ObjRef>)> = reading.items.iter().map(|g| (is_password(g), field_chain(doc, g.obj))).collect();
-    // The fields a field the reading left out may inherit a value from, other than one it reads as
-    // a password field: those above it up to the nearest that holds a `/V` (a null one is none,
-    // ISO 32000-2 §7.3.9), whose value it shows. A password field left out that inherits a value
-    // has already stopped the save ([`password_text`] takes in every field `read_as_password`
-    // does).
-    let holds = |a: &ObjRef| doc.get(*a).as_dict().and_then(|d| d.get(b"V")).is_some_and(|v| !matches!(&*held(doc, v), Object::Null));
-    let above_unread: std::collections::HashSet<ObjRef> = reading
-        .unread
-        .iter()
-        .map(|r| field_chain(doc, *r))
-        .filter(|chain| !read_as_password(doc, chain))
-        .flat_map(|chain| {
-            let end = chain.iter().position(holds).map_or(chain.len(), |i| i + 1);
-            chain.into_iter().take(end)
-        })
-        .collect();
+    // The fields whose value a field the reading left out shows, other than a password field: the
+    // nearest at or above it, as the reading would have inherited it, whose `/V` isn't null (ISO
+    // 32000-2 §7.3.9). A password field left out that holds a value has already stopped the save.
+    let above_unread: std::collections::HashSet<ObjRef> = reading.unread.iter().filter(|u| !u.password).filter_map(|u| u.shows).collect();
     for f in &targets {
         let chain = field_chain(doc, f.obj);
         for w in &f.widgets {
@@ -914,7 +875,7 @@ fn unread_value(doc: &Document, field: ObjRef, key: &[u8]) -> bool {
         if let Some(value) = d.get(key) {
             return holds_value(doc, value);
         }
-        node = d.get(b"Parent").and_then(|p| referred(doc, p));
+        node = d.reference(b"Parent");
     }
     false
 }

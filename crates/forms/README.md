@@ -52,8 +52,10 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   redaction refuses to remove a widget no field read owns. Clear form (`reset`) leaves a field
   whose default the reading didn't reach as it is, rather than emptying it. A save still clears a
   password value past the reading's allowances (`clear_password_values`), and refuses, so writes
-  no file, when such a value is in a field the reading left out; the open document doesn't keep a
-  password value past them after a save. A password value the reading doesn't see stays in the
+  no file, when such a value is in a field the reading left out, or on one of its widgets: the
+  reading records each field and widget it leaves out with the type, flags and value it would have
+  read for it, inherited down `/Kids` as it inherits them, and the save decides by those. The
+  open document doesn't keep a password value past them after a save. A password value the reading doesn't see stays in the
   files written, as on `main`: for example that of a field whose `/FT` is given by reference,
   unless a field above it gives `/Tx` directly, or that is nested past 64 levels, a value of the
   text "Off", which reads as none, a parent's value under a kid whose `/V` is null, which the

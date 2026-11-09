@@ -5153,7 +5153,7 @@ fn a_field_left_out_leaves_its_widgets_to_a_later_field() {
         "<< /FT /Tx /T (k) /Parent 4 0 R /Kids [5 0 R 7 0 R] >>".into(),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /Rect [0 20 10 30] >>".into(),
         // A widget whose /Parent is the kid field, which doesn't list it: the field's all the
-        // same (#6570).
+        // same (#6446).
         "<< /Type /Annot /Subtype /Widget /FT /Tx /Parent 6 0 R /Rect [0 40 10 50] >>".into(),
     ]);
     assert_eq!(widgets(&doc), [("p.k".to_string(), vec![5, 7, 8])]);
@@ -6437,7 +6437,7 @@ fn a_password_value_above_a_parent_given_through_a_reference_is_cleared() {
 }
 
 /// A page widget naming a field as its `/Parent`, which the field's `/Kids` leave out, is its
-/// widget all the same, as the reading reads it (#6570): a password field left out, for its own
+/// widget all the same, as the reading reads it (#6446): a password field left out, for its own
 /// text, its name or its parent's name, whose value is on that widget stops the save.
 #[test]
 fn a_password_value_on_a_page_widget_the_kids_leave_out_stops_the_save() {
@@ -6506,6 +6506,105 @@ fn a_listed_widget_of_a_field_left_out_is_not_read_as_a_field() {
     doc.update_dict(ObjRef::new(2, 0), |d| d.set(b"TU".to_vec(), too_long(b' '))).unwrap();
     let read = fields_with_adopted(&doc);
     assert_eq!((read.items.len(), read.left_out), (0, 1));
+}
+
+/// The save of `doc`, with nothing left out, clears the password value on object `holder`; with
+/// object `num`'s `entry` past the text allowance, it refuses rather than write it.
+fn cleared_when_read_refused_when_left_out(what: &str, doc: &Document, holder: u32, left_out: &[(u32, &[u8])]) {
+    let mut read = doc.clone();
+    assert_eq!(clear_password_values(&mut read).unwrap(), 1, "{what}: read");
+    assert_eq!(own_value(&read, holder), None, "{what}: cleared when read");
+    for &(num, entry) in left_out {
+        let mut doc = doc.clone();
+        doc.update_dict(ObjRef::new(num, 0), |d| d.set(entry.to_vec(), too_long(if entry == b"T" { b'n' } else { b' ' }))).unwrap();
+        assert!(fields_with_adopted(&doc).left_out > 0, "{what}, {num} {entry:?}: left out");
+        assert!(has_password_values(&doc), "{what}, {num} {entry:?}: a password value left out");
+        assert!(matches!(clear_password_values(&mut doc), Err(FormError::Invalid(_))), "{what}, {num} {entry:?}: the save refuses");
+    }
+}
+
+/// A widget kid with no `/Parent`, as a field's only kid may be (ISO 32000-2 Table 191), is the
+/// field's widget to the reading, whatever type it gives itself: its value is cleared with the
+/// field read, and stops the save with the field left out.
+#[test]
+fn a_parentless_widget_kid_of_a_password_field_left_out_stops_the_save() {
+    for widget in ["", " /FT /Ch"] {
+        let doc = document(&[
+            "<< /Type /Catalog /AcroForm << /Fields [2 0 R 4 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+            "<< /T (pw) /FT /Tx /Ff 8192 /Kids [3 0 R] >>".into(),
+            format!("<< /Type /Annot /Subtype /Widget /Rect [0 0 100 20]{widget} /V (secret) >>"),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (other) /Ff 8192 /Rect [0 30 100 50] >>".into(),
+        ]);
+        cleared_when_read_refused_when_left_out(widget, &doc, 3, &[(2, b"TU")]);
+    }
+}
+
+/// A page widget whose `/Parent` only refers on to a field, with a type and flags of its own, is
+/// read as a field of its own: left out, its password value stops the save, as it is cleared when
+/// read.
+#[test]
+fn a_password_widget_whose_parent_only_refers_on_left_out_stops_the_save() {
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Ff 8192 /V (secret) /Parent 6 0 R /Rect [0 0 100 20] /P 3 0 R >>".into(),
+        "<< /T (f) >>".into(),
+        "5 0 R".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (other) /Ff 8192 /Rect [0 30 100 50] /P 3 0 R >>".into(),
+    ]);
+    cleared_when_read_refused_when_left_out("a parent through a reference", &doc, 4, &[(4, b"TU")]);
+}
+
+/// A nameless widget `/Fields` lists, which its `/Parent`'s `/Kids` leave out, is read as a field
+/// of its own type and flags: left out, its password value stops the save, as it is cleared when
+/// read.
+#[test]
+fn a_listed_widget_its_parent_omits_left_out_stops_the_save() {
+    let doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [3 0 R 4 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+        "<< /T (p) >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Ff 8192 /V (secret) /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (other) /Ff 8192 /Rect [0 30 100 50] >>".into(),
+    ]);
+    cleared_when_read_refused_when_left_out("a listed widget", &doc, 3, &[(3, b"TU")]);
+}
+
+/// A field whose only named kid is a root `/Fields` lists, which doesn't name it as its `/Parent`,
+/// is a field itself, as the reading reads it (#6446): left out for its name, its password value
+/// stops the save. The root isn't left out with it: read, its own value is cleared, and doesn't
+/// stop the save.
+#[test]
+fn a_field_whose_only_named_kid_is_another_root_left_out() {
+    let form = |value: &str, root_value: &str| {
+        document(&[
+            "<< /Type /Catalog /AcroForm << /Fields [2 0 R 3 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+            format!("<< /Type /Annot /Subtype /Widget /T (pw) /FT /Tx /Ff 8192{value} /Kids [3 0 R] /Rect [0 0 100 20] >>"),
+            format!("<< /Type /Annot /Subtype /Widget /T (root) /FT /Tx /Ff 8192{root_value} /Rect [0 30 100 50] >>"),
+        ])
+    };
+    cleared_when_read_refused_when_left_out("the field's value", &form(" /V (secret)", ""), 2, &[(2, b"T")]);
+    let mut doc = form("", " /V (typed)");
+    doc.update_dict(ObjRef::new(2, 0), |d| d.set(b"T".to_vec(), too_long(b'n'))).unwrap();
+    let read = fields_with_adopted(&doc);
+    assert_eq!((read.items.into_iter().map(|f| f.name).collect::<Vec<_>>(), read.left_out), (vec!["root".to_string()], 1));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1, "the root's value is cleared, not refused");
+    assert_eq!(own_value(&doc, 3), None);
+}
+
+/// A kid that names another field as its `/Parent` is named up its own chain (#6570) and inherits
+/// from the field whose `/Kids` list it, as the reading reads it: left out, for its own text or for
+/// the listing field's name, its password value stops the save, as it is cleared when read.
+#[test]
+fn a_kid_naming_another_parent_left_out_stops_the_save() {
+    let doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [2 0 R 5 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+        "<< /T (p) /FT /Tx /Ff 8192 /Kids [3 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /T (k) /Parent 4 0 R /V (secret) /Rect [0 0 100 20] >>".into(),
+        "<< /T (q) >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (other) /Ff 8192 /Rect [0 30 100 50] >>".into(),
+    ]);
+    cleared_when_read_refused_when_left_out("a kid naming another parent", &doc, 3, &[(3, b"TU"), (2, b"T")]);
 }
 
 /// #4018: a value that doesn't fit its box at the field's font size is reported (it is drawn cut

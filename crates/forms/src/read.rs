@@ -638,6 +638,11 @@ struct Inherited {
     /// The fields that carry the `/V` and `/DV` that apply.
     v: Option<Arc<Object>>,
     dv: Option<Arc<Object>>,
+    /// Where `v` is, and the nearest field at or above this one whose `/V` isn't null, whose value
+    /// it shows (a null entry is an absent one, ISO 32000-2 §7.3.9): what a field left out would
+    /// have been read with ([`Unread`]).
+    v_at: Option<ObjRef>,
+    shown_at: Option<ObjRef>,
     da: Option<Rc<str>>,
     /// The `/DA` that applies didn't fit the text allowance: a field that would draw with it is
     /// left out, and one that sets its own, or a signature, drawn without one, is read.
@@ -650,6 +655,41 @@ struct Inherited {
 }
 
 impl Inherited {
+    /// The `/FT`, `/Ff`, `/V` and `/DV` of the field `obj` (at `r`) over what it inherits.
+    fn take(&mut self, doc: &Document, r: ObjRef, obj: &Arc<Object>) {
+        let Some(d) = obj.as_dict() else { return };
+        if let Some(ft) = d.name(b"FT") {
+            // Kept only as long as a type this reads (`Btn`, `Ch`, `Sig`, `Tx`): a longer name is
+            // none of them, and isn't copied.
+            self.ft = Some(Rc::from(if ft.len() <= 3 { ft } else { &[][..] }));
+        }
+        if let Some(ff) = field_flags(doc, d) {
+            self.ff = Some(ff);
+        }
+        if let Some(v) = d.get(b"V") {
+            (self.v, self.v_at) = (Some(obj.clone()), Some(r));
+            if !matches!(&*held(doc, v), Object::Null) {
+                self.shown_at = Some(r);
+            }
+        }
+        if d.contains(b"DV") {
+            self.dv = Some(obj.clone());
+        }
+    }
+
+    /// The record of a field left out that would have been read with this.
+    fn unread(&self) -> Unread {
+        let password = self.ft.as_deref() == Some(b"Tx") && self.ff.unwrap_or(0) & flags::PASSWORD != 0;
+        Unread { password, value: self.v_at, shows: self.shown_at }
+    }
+
+    /// The record of `w`, a widget of the field left out that inherits this: its field's type and
+    /// flags (the walk doesn't read a widget's own), and its own `/V`, which a save clears.
+    fn unread_widget(&self, doc: &Document, w: ObjRef) -> Unread {
+        let own = doc.get(w).as_dict().and_then(|d| d.get(b"V").map(|v| !matches!(&*held(doc, v), Object::Null)));
+        Unread { value: own.map(|_| w), shows: own.filter(|shown| *shown).map(|_| w), ..self.unread() }
+    }
+
     /// `o`, a field's or the form's `/DA`, as the one that applies from here down, charged to
     /// `text`. One that doesn't fit is noted, and leaves out the fields that would draw with it;
     /// one that isn't text leaves the inherited one in place.
@@ -700,11 +740,22 @@ pub(crate) struct Reading {
     pub(crate) items: Vec<Field>,
     pub(crate) adopted_page_fields: usize,
     pub(crate) left_out: usize,
-    /// The fields left out, and the fields and widgets under them, but for branches (a named kid
-    /// under each and no widget beside it), whose fields are among them: a save can't clear what
-    /// they hold through the fields read. A widget a later field read lists too is among them, as
-    /// its `/Parent` may still be the field left out.
-    pub(crate) unread: Vec<ObjRef>,
+    /// The fields left out, and the fields and widgets under them, each with what the walk would
+    /// have read for it: a save can't clear what they hold through the fields read. A widget a
+    /// later field read lists too is among them, as its `/Parent` may still be the field left out.
+    pub(crate) unread: Vec<Unread>,
+}
+
+/// A field the reading left out, or a widget of one, with what the walk would have read for it,
+/// inherited down `/Kids` as the walk inherits it.
+pub(crate) struct Unread {
+    /// A text field with the Password flag, by the `/FT` and `/Ff` it would have been read with (a
+    /// widget's are its field's).
+    pub(crate) password: bool,
+    /// The field whose `/V` it would have been read with, a null one included; a widget's own.
+    pub(crate) value: Option<ObjRef>,
+    /// The nearest field at or above it whose `/V` isn't null: the value it shows.
+    pub(crate) shows: Option<ObjRef>,
 }
 
 #[cfg(test)]
@@ -754,8 +805,7 @@ pub(crate) fn enumerate(doc: &Document) -> Reading {
         widgets: std::collections::HashSet::new(),
         withheld: std::collections::HashSet::new(),
         left_out: 0,
-        left_out_fields: Vec::new(),
-        branches: std::collections::HashSet::new(),
+        unread: Vec::new(),
         withheld_arrays: std::collections::HashMap::new(),
         roots: listed_roots.iter().copied().collect(),
         path: Vec::new(),
@@ -795,9 +845,7 @@ pub(crate) fn enumerate(doc: &Document) -> Reading {
     adopt_page_fields(doc, &pages, &base, &page_of, &mut seen, &mut out);
     let adopted = out.len() - listed;
     rank_tabs(doc, &pages, &annot_index, &mut out);
-    let branches = seen.branches;
-    let unread = seen.left_out_fields.into_iter().chain(seen.withheld).filter(|r| !branches.contains(r)).collect();
-    Reading { items: out, adopted_page_fields: adopted, left_out: seen.left_out, unread }
+    Reading { items: out, adopted_page_fields: adopted, left_out: seen.left_out, unread: seen.unread }
 }
 
 /// Widget annotations no `/Fields` entry reaches are adopted as fields, as Acrobat and the
@@ -881,11 +929,9 @@ struct Seen {
     withheld: std::collections::HashSet<ObjRef>,
     /// Fields left out of the reading for text that didn't fit ([`Fields::left_out`]).
     left_out: usize,
-    /// The dictionaries of those fields, or of the fields above them that the text was in.
-    left_out_fields: Vec<ObjRef>,
-    /// The nodes [`withhold_below`] found to be branches, a named kid under each and no widget beside
-    /// it, so no fields themselves ([`withhold_kids`]).
-    branches: std::collections::HashSet<ObjRef>,
+    /// Those fields, the fields under them and their widgets, each with what it would have been
+    /// read with ([`Reading::unread`]).
+    unread: Vec<Unread>,
     /// The `/Kids` arrays given by reference that [`withhold_below`] has read, by each reference on
     /// the way to them, and whether each makes its node a branch; a chain that ends nowhere, by its
     /// first reference, as not.
@@ -917,14 +963,29 @@ fn on_state_of(doc: &Document, wd: &Dict, text: &mut Allowance) -> Option<String
     text.copy(k.len(), || name_text(k))
 }
 
-/// Withholds the fields and widgets under `r`, a field left out of the reading for its name: none
-/// is adopted from the page as a field of its own, and a later field in the tree that lists one
-/// still takes it. Each is visited once, its text unread, so the walk ends however the kids loop.
-/// How many terminal fields it holds, `r` among them: those with a name that aren't branches.
-fn withhold_below(doc: &Document, r: ObjRef, seen: &mut Seen) -> usize {
+/// Leaves out a field read up to its own text, which inherits `inh`, with `claimed`, its widgets:
+/// each widget is withheld, for a later field that lists it to take, and the field and each widget
+/// are recorded with what the walk would have read for them.
+fn leave_out(doc: &Document, inh: &Inherited, claimed: std::collections::HashSet<ObjRef>, seen: &mut Seen) {
+    seen.unread.push(inh.unread());
+    for w in claimed {
+        seen.unread.push(inh.unread_widget(doc, w));
+        seen.withheld.insert(w);
+    }
+    seen.left_out = seen.left_out.saturating_add(1);
+}
+
+/// Withholds the fields and widgets under `r`, a field left out of the reading for its name, which
+/// inherits `inh`: none is adopted from the page as a field of its own, and a later field in the
+/// tree that lists one still takes it. Each is visited once, its text unread, so the walk ends
+/// however the kids loop, and each field and widget is recorded with what the walk would have read
+/// for it, inherited down `/Kids` as the walk inherits it ([`Reading::unread`]). How many terminal
+/// fields it holds, `r` among them: those with a name that aren't branches.
+fn withhold_below(doc: &Document, r: ObjRef, inh: &Inherited, seen: &mut Seen) -> usize {
     let mut terminal = 0usize;
-    let mut stack = vec![r];
-    while let Some(n) = stack.pop() {
+    seen.withheld.insert(r);
+    let mut stack = vec![(r, inh.clone())];
+    while let Some((n, inh)) = stack.pop() {
         let node = doc.get(n);
         let Some(d) = node.as_dict() else { continue };
         let branch = match d.get(b"Kids") {
@@ -946,7 +1007,7 @@ fn withhold_below(doc: &Document, r: ObjRef, seen: &mut Seen) -> usize {
                     match &*o {
                         Object::Ref(next) => r = *next,
                         list => {
-                            branch = Some(withhold_kids(doc, list, seen, &mut stack));
+                            branch = Some(withhold_kids(doc, list, n, &inh, seen, &mut stack));
                             break;
                         }
                     }
@@ -957,38 +1018,52 @@ fn withhold_below(doc: &Document, r: ObjRef, seen: &mut Seen) -> usize {
                 }
                 branch.unwrap_or(false)
             }
-            Some(list) => withhold_kids(doc, list, seen, &mut stack),
+            Some(list) => withhold_kids(doc, list, n, &inh, seen, &mut stack),
             None => false,
         };
         // A page widget naming `n` as its `/Parent` is its widget even when its `/Kids` leave it
         // out, as [`walk`] reads it.
         for &w in seen.by_parent.get(&n).into_iter().flatten() {
             if seen.withheld.insert(w) {
-                stack.push(w);
+                seen.unread.push(inh.unread_widget(doc, w));
+                stack.push((w, inh.clone()));
             }
         }
-        if branch {
-            seen.branches.insert(n);
-        } else if d.contains(b"T") {
+        if !branch && d.contains(b"T") {
             terminal = terminal.saturating_add(1);
+            seen.unread.push(inh.unread());
         }
     }
     terminal
 }
 
-/// Withholds the kids `list` holds, pushing those not withheld before onto `stack`; whether they
-/// make their node a branch rather than a field: one of them has a name, and none is a widget
-/// beside it, which [`walk`] reads as the node's own.
-fn withhold_kids(doc: &Document, list: &Object, seen: &mut Seen, stack: &mut Vec<ObjRef>) -> bool {
+/// Withholds the kids `list` of `n` holds, which inherits `inh`, pushing those not withheld before
+/// onto `stack`, a named kid with what it inherits and its own entries, a widget recorded with
+/// `n`'s; whether they make `n` a branch rather than a field: one of them is a named kid of `n`, and
+/// none is a widget beside it, which [`walk`] reads as `n`'s own. A named kid that is no child of
+/// `n`, a root `/Fields` lists that doesn't name `n` as its `/Parent` ([`not_a_child`]), is left to
+/// the walk of `/Fields`, which reads it.
+fn withhold_kids(doc: &Document, list: &Object, n: ObjRef, inh: &Inherited, seen: &mut Seen, stack: &mut Vec<(ObjRef, Inherited)>) -> bool {
     let kids: Vec<ObjRef> = list.as_array().into_iter().flatten().filter_map(Object::as_ref).collect();
     #[cfg(test)]
     WITHHELD_ENTRIES.with(|c| c.set(c.get() + kids.len()));
     let named = |k: &ObjRef| doc.get(*k).as_dict().is_some_and(|d| d.contains(b"T"));
     let widget = |k: &ObjRef| doc.get(*k).as_dict().is_some_and(|d| !d.contains(b"T") && d.name(b"Subtype") == Some(b"Widget"));
-    let branch = kids.iter().any(named) && !kids.iter().any(widget);
+    let child = |k: &ObjRef| !seen.roots.contains(k) || doc.get(*k).as_dict().and_then(|d| d.reference(b"Parent")) == Some(n);
+    let branch = kids.iter().any(|k| named(k) && child(k)) && !kids.iter().any(widget);
     for k in kids {
+        let field = named(&k);
+        if field && !child(&k) {
+            continue;
+        }
         if seen.withheld.insert(k) {
-            stack.push(k);
+            let mut kid = inh.clone();
+            if field {
+                kid.take(doc, k, &doc.get(k));
+            } else {
+                seen.unread.push(inh.unread_widget(doc, k));
+            }
+            stack.push((k, kid));
         }
     }
     branch
@@ -1048,25 +1123,12 @@ fn walk(
             inh.name = Rc::from(format!("{}.{t}", inh.name));
         }
     }
-    if let Some(ft) = d.name(b"FT") {
-        // Kept only as long as a type this reads (`Btn`, `Ch`, `Sig`, `Tx`): a longer name is
-        // none of them, and isn't copied.
-        inh.ft = Some(Rc::from(if ft.len() <= 3 { ft } else { &[][..] }));
-    }
-    if let Some(ff) = field_flags(doc, d) {
-        inh.ff = Some(ff);
-    }
-    for (k, slot) in [(&b"V"[..], &mut inh.v), (b"DV", &mut inh.dv)] {
-        if d.contains(k) {
-            *slot = Some(obj.clone());
-        }
-    }
+    inh.take(doc, r, &obj);
     // A name that doesn't fit leaves the field out, with the fields under it, whose full names
     // need it; a `/DA` that doesn't fit, only the fields that would draw with it.
     if inh.name_refused || seen.text.refusals() != refusals {
-        let fields = withhold_below(doc, r, seen).max(1);
+        let fields = withhold_below(doc, r, &inh, seen).max(1);
         seen.left_out = seen.left_out.saturating_add(fields);
-        seen.left_out_fields.push(r);
         return;
     }
     if let Some(o) = d.get(b"DA") {
@@ -1147,9 +1209,7 @@ fn walk(
     // A field that would draw with a `/DA` that didn't fit is left out before it reads its
     // scripts; a signature, drawn without one, is read.
     if inh.da_refused && kind != FieldKind::Signature {
-        seen.withheld.extend(claimed);
-        seen.left_out = seen.left_out.saturating_add(1);
-        seen.left_out_fields.push(r);
+        leave_out(doc, &inh, claimed, seen);
         return;
     }
     let refusals = seen.text.refusals();
@@ -1225,9 +1285,7 @@ fn walk(
     text.take(inh.name.len());
     text.take(field_da.len());
     if text.refusals() != refusals {
-        seen.withheld.extend(claimed);
-        seen.left_out = seen.left_out.saturating_add(1);
-        seen.left_out_fields.push(r);
+        leave_out(doc, &inh, claimed, seen);
         return;
     }
     seen.widgets.extend(claimed);
