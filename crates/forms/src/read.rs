@@ -402,7 +402,11 @@ fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Allowa
         dict.get(b"AA").map(|a| held(doc, a)).filter(|a| a.as_dict().is_some())
     }
     let aa = aa_of(doc, d).or_else(|| widget.as_deref().and_then(Object::as_dict).and_then(|wd| aa_of(doc, wd)));
-    let mut out = af::Actions::default();
+    let mut out = af::Actions {
+        // A date field the XFA layout generated: what its format doesn't read is kept as typed.
+        xfa_date: matches!(d.get(b"PCXfaDate").map(|o| held(doc, o)).as_deref(), Some(Object::Bool(true))),
+        ..af::Actions::default()
+    };
     let Some(aa) = aa.as_deref().and_then(Object::as_dict) else { return out };
     let mut js = |k: &[u8]| aa.get(k).and_then(|a| script(doc, a, scripts));
     if let Some(f) = js(b"F") {
@@ -477,6 +481,69 @@ fn values_of(doc: &Document, o: Option<&Object>, budget: &mut Allowance) -> Vec<
         Object::Stream(s) => budget.decode(s, |b| Some(PdfString::literal(b).to_text())).into_iter().collect(),
         other => budget.text(doc, other).filter(|s| s != "Off" && !s.is_empty()).into_iter().collect(),
     }
+}
+
+/// A choice field's `/I` (ISO 32000-2 Table 234) as option positions, when it is usable: an array
+/// of integers "sorted in ascending order", each naming one of `count` options. `None` when it is
+/// absent or anything in it is not (a non-integer, a position out of range, out of order or
+/// repeated), so the field falls back to `/V`.
+pub(crate) fn listed_indices(doc: &Document, d: &Dict, count: usize) -> Option<Vec<usize>> {
+    let listed = doc.resolve(d.get(b"I")?);
+    let entries = listed.as_array()?;
+    // Strictly ascending positions below `count` number at most `count`.
+    if entries.len() > count {
+        return None;
+    }
+    let mut out: Vec<usize> = Vec::with_capacity(entries.len());
+    for e in entries {
+        let i = usize::try_from(doc.resolve(e).as_int()?).ok().filter(|&i| i < count)?;
+        if out.last().is_some_and(|&last| last >= i) {
+            return None;
+        }
+        out.push(i);
+    }
+    Some(out)
+}
+
+/// The options a choice field shows selected, as ascending positions in `options`, given its
+/// values (`/V`) and its usable `/I` ([`listed_indices`]).
+///
+/// `/I` decides when it names the same export values as `/V`: it "shall be used when two or more
+/// elements in the Opt array have different names but the same export value", and "if the items
+/// identified by this entry differ from those in the V entry …, the V entry shall be used" (ISO
+/// 32000-2 Table 234). Otherwise each value selects the first option with that export value, as
+/// the writer numbers `/I` when it is given only an export value, so a pick keeps showing the same
+/// option when `/I` is lost. A value no option exports selects nothing.
+pub fn selected_options(options: &[(String, String)], values: &[String], listed: Option<&[usize]>) -> Vec<usize> {
+    if let Some(listed) = listed {
+        // The same items, each as many times: `/V [(1) (1)]` names two items, which an `/I [1]`
+        // naming one doesn't, so `/V` decides then.
+        let mut named: Vec<&str> = values.iter().map(String::as_str).collect();
+        named.sort_unstable();
+        let exports: Option<Vec<&str>> = listed.iter().map(|&i| options.get(i).map(|(e, _)| e.as_str())).collect();
+        if let Some(mut exports) = exports {
+            exports.sort_unstable();
+            if exports == named {
+                return listed.to_vec();
+            }
+        }
+    }
+    let first = first_by_export(options);
+    let mut out: Vec<usize> = values.iter().filter_map(|v| first.get(v.as_str()).copied()).collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Each export value in `options` with the position of the first option exporting it, so
+/// matching values against options takes one pass over each rather than one over the options per
+/// value (a file can hold many of both).
+pub(crate) fn first_by_export(options: &[(String, String)]) -> std::collections::HashMap<&str, usize> {
+    let mut first: std::collections::HashMap<&str, usize> = std::collections::HashMap::with_capacity(options.len());
+    for (i, (e, _)) in options.iter().enumerate() {
+        first.entry(e.as_str()).or_insert(i);
+    }
+    first
 }
 
 fn nums(doc: &Document, o: Option<&Object>) -> Option<Vec<f64>> {
@@ -1165,15 +1232,18 @@ fn walk(
     }
     seen.widgets.extend(claimed);
     let values = if kind == FieldKind::Text && ff & flags::PASSWORD != 0 { &mut seen.passwords } else { &mut seen.values };
+    let (value, default, selected, single_value_is_array) = field_values(doc, d, &inh, kind, &options, values);
     out.push(Field {
         name: inh.name.to_string(),
         obj: r,
         kind,
-        value: values_of(doc, inh.v.as_deref().and_then(Object::as_dict).and_then(|f| f.get(b"V")), values),
-        default: values_of(doc, inh.dv.as_deref().and_then(Object::as_dict).and_then(|f| f.get(b"DV")), values),
+        value,
+        default,
         flags: ff,
         max_len: inh.max_len,
         options,
+        selected,
+        single_value_is_array,
         da: field_da.to_string(),
         quadding: inh.q.unwrap_or(0),
         tooltip,
@@ -1181,6 +1251,40 @@ fn walk(
         actions,
         button,
     });
+}
+
+/// A field's value and default, read from the fields that carry them against `values`; the options
+/// of a choice field they select ([`selected_options`], with its `/I`); and whether a single-select
+/// list box's value is an array.
+fn field_values(
+    doc: &Document,
+    d: &Dict,
+    inh: &Inherited,
+    kind: FieldKind,
+    options: &[(String, String)],
+    values: &mut Allowance,
+) -> (Vec<String>, Vec<String>, Vec<usize>, bool) {
+    let v_entry = inh.v.as_deref().and_then(Object::as_dict).and_then(|f| f.get(b"V"));
+    let mut value = values_of(doc, v_entry, values);
+    // A list box without MultiSelect selects one option: "if clear, at most one item shall be
+    // selected" (ISO 32000-2 Table 233). Given an array /V or /DV anyway, it holds the first
+    // value only, and shows and resets to it; the file keeps its entries until the field is filled.
+    let mut default = values_of(doc, inh.dv.as_deref().and_then(Object::as_dict).and_then(|f| f.get(b"DV")), values);
+    let single = kind == FieldKind::List && inh.ff.unwrap_or(0) & flags::MULTI_SELECT == 0;
+    // Read where it is: a value many fields inherit isn't copied for each.
+    let single_value_is_array = single && v_entry.is_some_and(|v| held(doc, v).as_array().is_some());
+    if single {
+        value.truncate(1);
+        default.truncate(1);
+    }
+    let mut selected = match kind {
+        FieldKind::Combo | FieldKind::List => selected_options(options, &value, listed_indices(doc, d, options.len()).as_deref()),
+        _ => Vec::new(),
+    };
+    if single {
+        selected.truncate(1);
+    }
+    (value, default, selected, single_value_is_array)
 }
 
 pub(crate) fn field_flags(doc: &Document, dict: &Dict) -> Option<u32> {
