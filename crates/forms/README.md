@@ -52,18 +52,22 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   redaction refuses to remove a widget no field read owns. Clear form (`reset`) leaves a field
   whose default the reading didn't reach as it is, rather than emptying it, looking for that
   default where the reading took it, down `/Kids`. A save still clears a password value past the
-  reading's allowances (`clear_password_values`), looked for the same way, and refuses, so writes
-  no file, when such a value is in a field the reading left out, or on one of its widgets: the
-  reading records each field and widget it leaves out with the type, flags and value it would
-  have read for it, inherited down `/Kids` and visited in the order it reads them, a field of no
-  type it reads or past 64 levels not among them, and the save decides by those records. The open
-  document doesn't keep a password value past them after a save. A password value the reading
-  doesn't see stays in the files written, as on `main`: for example that of a field whose `/FT`
-  is given by reference, unless a field above it gives `/Tx` directly, or that is nested past 64
-  levels, a value of the text "Off", which reads as none, a parent's value under a kid whose `/V`
-  is null, which the reading takes for no value, a value 64 levels above a password field, and a
-  parent's value a password field inherits when another field read under it has a value of its
-  own.
+  reading's allowances (`clear_password_values`), looked for the same way. When the form has a
+  field with the Password flag and the reading left anything out, what that holds isn't known, so
+  the save refuses and writes no file. Any form whose field text passes the 256 MiB allowance is
+  left incomplete, not only a hostile one: about 1,370 combo boxes listing one 2,000-item list of
+  options reach it, which `main` reads whole, so such a form with a password field can't be
+  saved. The open document doesn't keep a password value past the allowances after a save. With
+  nothing left out, a password value the reading doesn't see stays in the files written, as on
+  `main`: for example that of a field whose `/FT` is given by reference, unless a field above it
+  gives `/Tx` directly, or that is nested past 64 levels, a value of the text "Off", which reads
+  as none, a parent's value under a kid whose `/V` is null, which the reading takes for no value,
+  a value 64 levels above a password field, and a parent's value a password field inherits when
+  another field read under it has a value of its own. So does the value of a password field the
+  reading reads but the check for the flag before it (`has_password_flag`) misses, which the save
+  then neither clears nor refuses for: one under a root adopted from a page whose own widget is
+  on no page, one adopted through a widget in another field's `/Kids` naming it as its `/Parent`,
+  and a root `/Fields` lists that the check first meets 64 levels down another root's `/Kids`.
   `field_actions`, `document_scripts` and renaming a field read within the same allowances;
   `field_actions` lists an action whose script or text doesn't fit as an action of another type,
   which `set_field_actions` keeps as it is.

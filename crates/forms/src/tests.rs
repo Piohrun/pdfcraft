@@ -6264,13 +6264,12 @@ fn a_password_value_past_its_own_allowance_is_still_cleared() {
     assert_eq!(password_values(&doc).len(), 64, "the value not read isn't kept");
 }
 
-/// #6175 review: a text field with the Password flag that the reading leaves out, its text past
-/// the allowance, can't be cleared through the fields read, so a save refuses rather than write
-/// its value: the field's own, inherited, or on a widget of its own, the field left out for its
-/// own text, its `/DA`, its own name or its parent's name, with a widget of its own or none. One
-/// that holds no value, or a field left out without the flag or of another type, doesn't stop the
-/// save. Each form has another password field, read and empty, so none is passed over for having
-/// no field with the flag.
+/// #6175 review: a form with a field that has the Password flag, whose reading leaves a field out,
+/// its text past the allowance, refuses a save: what that field holds isn't known, nor whether a
+/// password value is among it. So whether the field left out is a password field holding a value,
+/// its own, inherited or on a widget of its own, or one holding none, one without the flag or of
+/// another type; and whether it is left out for its own text, its `/DA`, its own name or its
+/// parent's name. Each form has another password field, read and empty.
 #[test]
 fn a_password_field_left_out_of_the_reading_stops_the_save() {
     let long = |byte: u8| Object::String(PdfString::literal(vec![byte; crate::read::MAX_TEXT_BYTES]));
@@ -6286,141 +6285,167 @@ fn a_password_field_left_out_of_the_reading_stops_the_save() {
     };
     let password = " /FT /Tx /Ff 8192";
     let cases = [
-        ("its own value", form("", &format!("{password} /V (secret)"), Some("")), true),
-        ("its own value and no widget", form("", &format!("{password} /V (secret)"), None), true),
-        ("an inherited value", form(" /V (secret)", password, Some("")), true),
-        ("a widget's value", form("", password, Some(" /V (secret)")), true),
-        ("a widget's value under a type of its own", form("", password, Some(" /FT /Ch /V (secret)")), true),
-        ("no value", form("", password, Some("")), false),
-        ("no Password flag", form("", " /FT /Tx /Ff 4096 /V (secret)", Some("")), false),
-        ("a choice field", form("", " /FT /Ch /Ff 8192 /V (secret)", Some("")), false),
+        ("its own value", form("", &format!("{password} /V (secret)"), Some(""))),
+        ("its own value and no widget", form("", &format!("{password} /V (secret)"), None)),
+        ("an inherited value", form(" /V (secret)", password, Some(""))),
+        ("a widget's value", form("", password, Some(" /V (secret)"))),
+        ("a widget's value under a type of its own", form("", password, Some(" /FT /Ch /V (secret)"))),
+        ("no value", form("", password, Some(""))),
+        ("no Password flag", form("", " /FT /Tx /Ff 4096 /V (secret)", Some(""))),
+        ("a choice field", form("", " /FT /Ch /Ff 8192 /V (secret)", Some(""))),
     ];
-    for (what, doc, refused) in cases {
+    for (what, doc) in cases {
         let ways = [("for its tooltip", &b"TU"[..], 3), ("for its /DA", b"DA", 3), ("for its name", b"T", 3), ("for its parent's name", b"T", 2)];
         for (left_out, entry, num) in ways {
             let mut doc = doc.clone();
             doc.update_dict(ObjRef::new(num, 0), |d| d.set(entry.to_vec(), long(b'n'))).unwrap();
             assert_eq!(fields(&doc).into_iter().map(|f| f.name).collect::<Vec<_>>(), ["other"], "{what}, {left_out}: left out");
-            assert_eq!(has_password_values(&doc), refused, "{what}, {left_out}");
+            assert!(has_password_values(&doc), "{what}, {left_out}");
             match clear_password_values(&mut doc) {
-                Err(FormError::Invalid(e)) if refused => assert!(e.contains("isn't written"), "{e}"),
-                Ok(0) if !refused => {}
+                Err(FormError::Invalid(e)) => assert!(e.contains("isn't written"), "{e}"),
                 other => panic!("{what}, {left_out}: {other:?}"),
             }
         }
     }
 }
 
-/// #6175 review: an ancestor's value that a password field shares with a field the reading left
-/// out stays for that field: only the fields read are known, so the password field gets an empty
-/// value of its own instead, also when that field is a kid clearing the Password flag it would
-/// inherit. A field left out elsewhere in the form, or one left out under it with a value of its
-/// own, which it doesn't inherit, doesn't keep the value of an ancestor only password fields
-/// inherit from.
+/// A form with no field that has the Password flag saves whatever its reading left out: there is
+/// no password value to keep out of the file, and the value of the field left out stays.
 #[test]
-fn a_value_shared_with_a_field_left_out_under_it_stays() {
+fn a_reading_left_incomplete_without_a_password_field_saves() {
     let mut doc = document(&[
-        "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
-        "<< /T (grp) /FT /Tx /V (shared) /Kids [3 0 R 4 0 R] >>".into(),
-        "<< /Type /Annot /Subtype /Widget /T (pw) /Ff 8192 /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
-        "<< /Type /Annot /Subtype /Widget /T (plain) /Parent 2 0 R /Rect [0 30 100 50] >>".into(),
+        "<< /Type /Catalog /AcroForm << /Fields [2 0 R 3 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /T (a) /FT /Tx /V (kept) /Rect [0 0 100 20] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /T (b) /FT /Tx /Ff 4096 /Rect [0 30 100 50] >>".into(),
     ]);
-    let read = |doc: &Document| fields_with_adopted(doc).items.into_iter().map(|f| f.name).collect::<Vec<_>>();
-    assert_eq!(read(&doc), ["grp.pw", "grp.plain"]);
-    doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"TU".to_vec(), Object::String(PdfString::literal(vec![b' '; crate::read::MAX_TEXT_BYTES]))))
-        .unwrap();
-    assert_eq!(read(&doc), ["grp.pw"], "the plain field is left out");
-    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
-    assert_eq!(own_value(&doc, 2).as_deref(), Some("shared"), "the shared value stays");
-    assert_eq!(own_value(&doc, 3).as_deref(), Some(""), "the password field's own, empty");
-    let mut doc = document(&[
-        "<< /Type /Catalog /AcroForm << /Fields [2 0 R 4 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
-        "<< /T (grp) /FT /Tx /Ff 8192 /V (secret) /Kids [3 0 R] >>".into(),
-        "<< /Type /Annot /Subtype /Widget /T (pw) /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
-        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (x) /V (keep) /Rect [0 30 100 50] >>".into(),
-    ]);
-    doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"TU".to_vec(), Object::String(PdfString::literal(vec![b' '; crate::read::MAX_TEXT_BYTES]))))
-        .unwrap();
-    assert_eq!(read(&doc), ["grp.pw"], "the other field is left out");
-    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
-    assert_eq!((own_value(&doc, 2), own_value(&doc, 3)), (None, None), "the ancestor's value is the password field's alone");
-    // Nor does a password field left out under it that holds a value of its own, which it doesn't
-    // inherit.
-    let mut doc = document(&[
-        "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
-        "<< /T (grp) /FT /Tx /Ff 8192 /V (secret) /Kids [3 0 R 4 0 R] >>".into(),
-        "<< /Type /Annot /Subtype /Widget /T (pw) /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
-        "<< /Type /Annot /Subtype /Widget /T (pw2) /Parent 2 0 R /V () /Rect [0 30 100 50] >>".into(),
-    ]);
-    doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"TU".to_vec(), Object::String(PdfString::literal(vec![b' '; crate::read::MAX_TEXT_BYTES]))))
-        .unwrap();
-    assert_eq!(read(&doc), ["grp.pw"], "the second password field is left out");
-    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
-    assert_eq!((own_value(&doc, 2), own_value(&doc, 3)), (None, None), "the ancestor's value is the password fields' alone");
-    // A kid that clears the flag, left out, is a text field that inherits the value
-    // (a null `/V` is none), so the value stays for it.
-    let mut doc = document(&[
-        "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
-        "<< /T (grp) /FT /Tx /Ff 8192 /V (secret) /Kids [3 0 R 4 0 R] >>".into(),
-        "<< /Type /Annot /Subtype /Widget /T (pw) /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
-        "<< /Type /Annot /Subtype /Widget /T (plain) /Ff 0 /V null /Parent 2 0 R /Rect [0 30 100 50] >>".into(),
-    ]);
-    doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"TU".to_vec(), Object::String(PdfString::literal(vec![b' '; crate::read::MAX_TEXT_BYTES]))))
-        .unwrap();
-    assert_eq!(read(&doc), ["grp.pw"], "the plain field is left out");
-    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
-    assert_eq!(own_value(&doc, 2).as_deref(), Some("secret"), "the value stays for the plain field");
-    assert_eq!(own_value(&doc, 3).as_deref(), Some(""), "the password field's own, empty");
-    // A password field left out whose `/V` is null, which inherits the ancestor's value (ISO
-    // 32000-2 §7.3.9), doesn't keep it, nor does its separate widget, whose own `/Ff` isn't its
-    // field's flags.
-    let mut doc = document(&[
-        "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
-        "<< /T (grp) /FT /Tx /Ff 8192 /V (secret) /Kids [3 0 R 4 0 R] >>".into(),
-        "<< /Type /Annot /Subtype /Widget /T (pw) /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
-        "<< /T (pw2) /V null /Parent 2 0 R /Kids [5 0 R] >>".into(),
-        "<< /Type /Annot /Subtype /Widget /Ff 0 /Parent 4 0 R /Rect [0 30 100 50] >>".into(),
-    ]);
-    doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"TU".to_vec(), Object::String(PdfString::literal(vec![b' '; crate::read::MAX_TEXT_BYTES]))))
-        .unwrap();
-    assert_eq!(read(&doc), ["grp.pw"], "the second password field is left out");
-    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
-    assert_eq!((own_value(&doc, 2), own_value(&doc, 3)), (None, None), "a password field left out, and its widget, don't keep the value");
-    // A field left out with a value of its own doesn't inherit the ancestor's, whatever its kind,
-    // under a parent with the flag or one without.
-    for (parent, kid) in [(" /Ff 8192", " /Ff 0"), ("", "")] {
-        let mut doc = document(&[
-            "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
-            format!("<< /T (grp) /FT /Tx{parent} /V (secret) /Kids [3 0 R 4 0 R] >>"),
-            "<< /Type /Annot /Subtype /Widget /T (pw) /Ff 8192 /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
-            format!("<< /Type /Annot /Subtype /Widget /T (plain){kid} /V () /Parent 2 0 R /Rect [0 30 100 50] >>"),
-        ]);
-        doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"TU".to_vec(), Object::String(PdfString::literal(vec![b' '; crate::read::MAX_TEXT_BYTES]))))
-            .unwrap();
-        assert_eq!(read(&doc), ["grp.pw"], "{parent:?}: the plain field is left out");
-        assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
-        assert_eq!((own_value(&doc, 2), own_value(&doc, 3)), (None, None), "{parent:?}: no field left out inherits the value");
+    doc.update_dict(ObjRef::new(2, 0), |d| d.set(b"TU".to_vec(), too_long(b' '))).unwrap();
+    assert_eq!(fields_with_adopted(&doc).left_out, 1);
+    assert!(!has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 0, "the save goes ahead");
+    assert_eq!(own_value(&doc, 2).as_deref(), Some("kept"));
+}
+
+/// #6175 review: an ancestor's value a password field shares with another field: read whole, the
+/// save clears it only when the ancestor's value is the password fields' alone, and otherwise
+/// gives the password field an empty value of its own, a kid clearing the flag counting as
+/// another field. With any of those fields left out, the save refuses: whether the field left out
+/// inherits the value isn't known.
+#[test]
+fn a_value_shared_with_a_field_left_out_stops_the_save() {
+    let forms: [(&str, Vec<String>, Option<&str>); 7] = [
+        (
+            "a plain field sharing the value",
+            vec![
+                "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+                "<< /T (grp) /FT /Tx /V (shared) /Kids [3 0 R 4 0 R] >>".into(),
+                "<< /Type /Annot /Subtype /Widget /T (pw) /Ff 8192 /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
+                "<< /Type /Annot /Subtype /Widget /T (plain) /Parent 2 0 R /Rect [0 30 100 50] >>".into(),
+            ],
+            Some("shared"),
+        ),
+        (
+            "a field elsewhere",
+            vec![
+                "<< /Type /Catalog /AcroForm << /Fields [2 0 R 4 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+                "<< /T (grp) /FT /Tx /Ff 8192 /V (secret) /Kids [3 0 R] >>".into(),
+                "<< /Type /Annot /Subtype /Widget /T (pw) /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
+                "<< /Type /Annot /Subtype /Widget /FT /Ch /T (x) /V (keep) /Rect [0 30 100 50] >>".into(),
+            ],
+            None,
+        ),
+        (
+            "a second password field with a value of its own",
+            vec![
+                "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+                "<< /T (grp) /FT /Tx /Ff 8192 /V (secret) /Kids [3 0 R 4 0 R] >>".into(),
+                "<< /Type /Annot /Subtype /Widget /T (pw) /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
+                "<< /Type /Annot /Subtype /Widget /T (pw2) /Parent 2 0 R /V () /Rect [0 30 100 50] >>".into(),
+            ],
+            None,
+        ),
+        (
+            "a kid clearing the flag, with a null value",
+            vec![
+                "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+                "<< /T (grp) /FT /Tx /Ff 8192 /V (secret) /Kids [3 0 R 4 0 R] >>".into(),
+                "<< /Type /Annot /Subtype /Widget /T (pw) /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
+                "<< /Type /Annot /Subtype /Widget /T (plain) /Ff 0 /V null /Parent 2 0 R /Rect [0 30 100 50] >>".into(),
+            ],
+            Some("secret"),
+        ),
+        (
+            "a second password field with a null value and a widget of its own",
+            vec![
+                "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+                "<< /T (grp) /FT /Tx /Ff 8192 /V (secret) /Kids [3 0 R 4 0 R] >>".into(),
+                "<< /Type /Annot /Subtype /Widget /T (pw) /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
+                "<< /T (pw2) /V null /Parent 2 0 R /Kids [5 0 R] >>".into(),
+                "<< /Type /Annot /Subtype /Widget /Ff 0 /Parent 4 0 R /Rect [0 30 100 50] >>".into(),
+            ],
+            None,
+        ),
+        (
+            "a kid clearing the flag, with a value of its own",
+            vec![
+                "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+                "<< /T (grp) /FT /Tx /Ff 8192 /V (secret) /Kids [3 0 R 4 0 R] >>".into(),
+                "<< /Type /Annot /Subtype /Widget /T (pw) /Ff 8192 /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
+                "<< /Type /Annot /Subtype /Widget /T (plain) /Ff 0 /V () /Parent 2 0 R /Rect [0 30 100 50] >>".into(),
+            ],
+            Some("secret"),
+        ),
+        (
+            "a plain field with a value of its own",
+            vec![
+                "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+                "<< /T (grp) /FT /Tx /V (secret) /Kids [3 0 R 4 0 R] >>".into(),
+                "<< /Type /Annot /Subtype /Widget /T (pw) /Ff 8192 /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
+                "<< /Type /Annot /Subtype /Widget /T (plain) /V () /Parent 2 0 R /Rect [0 30 100 50] >>".into(),
+            ],
+            Some("secret"),
+        ),
+    ];
+    for (what, objs, kept) in forms {
+        let doc = document(&objs);
+        let read = refuses_when_left_out(what, &doc, 1, &[(4, b"TU")]);
+        assert_eq!(own_value(&read, 2).as_deref(), kept, "{what}: the ancestor's value when read");
+        if kept.is_some() {
+            assert_eq!(own_value(&read, 3).as_deref(), Some(""), "{what}: the password field's own, empty");
+        }
     }
 }
 
-/// #6175 review: a field left out for its name whose kids are fields holds no value a field
-/// shows: its fields, left out with it, are looked at themselves. A password field under it with a
-/// value of its own doesn't keep the value of an ancestor only password fields inherit from.
+/// #6175 review: a field left out for its name whose kids are fields leaves those out with it, so
+/// a form with a password field refuses the save; read whole, the ancestor's value, which only
+/// password fields inherit, is cleared.
 #[test]
-fn a_field_left_out_above_others_keeps_no_value_for_them() {
-    let mut doc = document(&[
+fn a_field_left_out_above_others_stops_the_save() {
+    let doc = document(&[
         "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
         "<< /T (grp) /V (secret) /Kids [3 0 R 4 0 R] >>".into(),
         "<< /Type /Annot /Subtype /Widget /T (pw) /FT /Tx /Ff 8192 /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
         "<< /T (mid) /Parent 2 0 R /Kids [5 0 R] >>".into(),
         "<< /Type /Annot /Subtype /Widget /T (leaf) /FT /Tx /Ff 8192 /V () /Parent 4 0 R /Rect [0 30 100 50] >>".into(),
     ]);
-    doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"T".to_vec(), Object::String(PdfString::literal(vec![b'n'; crate::read::MAX_TEXT_BYTES]))))
-        .unwrap();
-    let read = fields_with_adopted(&doc);
-    assert_eq!((read.items.into_iter().map(|f| f.name).collect::<Vec<_>>(), read.left_out), (vec!["grp.pw".to_string()], 1));
-    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
-    assert_eq!((own_value(&doc, 2), own_value(&doc, 3)), (None, None), "the ancestor's value is the password fields' alone");
+    let read = refuses_when_left_out("a field above others", &doc, 1, &[(4, b"T")]);
+    assert_eq!((own_value(&read, 2), own_value(&read, 3)), (None, None), "the ancestor's value is the password fields' alone");
+}
+
+/// The save of `doc` with nothing left out clears `cleared` password fields, after which none holds
+/// a value; with object `num`'s `entry` past the text allowance, the reading is incomplete and the
+/// form has a password field, so the save refuses. The cleared copy, for what else to check.
+fn refuses_when_left_out(what: &str, doc: &Document, cleared: usize, left_out: &[(u32, &[u8])]) -> Document {
+    let mut read = doc.clone();
+    assert_eq!(clear_password_values(&mut read).unwrap(), cleared, "{what}: read whole");
+    assert!(!has_password_values(&read), "{what}: no password value held after the clear");
+    for &(num, entry) in left_out {
+        let mut doc = doc.clone();
+        doc.update_dict(ObjRef::new(num, 0), |d| d.set(entry.to_vec(), too_long(if entry == b"T" { b'n' } else { b' ' }))).unwrap();
+        assert!(fields_with_adopted(&doc).left_out > 0, "{what}, {num} {entry:?}: left out");
+        assert!(has_password_values(&doc), "{what}, {num} {entry:?}: a password field, and the reading incomplete");
+        assert!(matches!(clear_password_values(&mut doc), Err(FormError::Invalid(_))), "{what}, {num} {entry:?}: the save refuses");
+    }
+    read
 }
 
 /// The text a reading leaves a field out for, a field's own: 256 MiB of `byte`.
@@ -6607,8 +6632,9 @@ fn a_listed_widget_its_parent_omits_left_out_stops_the_save() {
 
 /// A field whose only named kid is a root `/Fields` lists, which doesn't name it as its `/Parent`,
 /// is a field itself, as the reading reads it (#6446): left out for its name, its password value
-/// stops the save. The root isn't left out with it: read, its own value is cleared, and doesn't
-/// stop the save.
+/// stops the save. The root is held back with it, though the walk wouldn't read it under the field
+/// (holding back more than the walk would read is the safe way round), so the save refuses for
+/// the root's value too, which it clears when the form is read whole.
 #[test]
 fn a_field_whose_only_named_kid_is_another_root_left_out() {
     let form = |value: &str, root_value: &str| {
@@ -6619,12 +6645,7 @@ fn a_field_whose_only_named_kid_is_another_root_left_out() {
         ])
     };
     cleared_when_read_refused_when_left_out("the field's value", &form(" /V (secret)", ""), 2, &[(2, b"T")]);
-    let mut doc = form("", " /V (typed)");
-    doc.update_dict(ObjRef::new(2, 0), |d| d.set(b"T".to_vec(), too_long(b'n'))).unwrap();
-    let read = fields_with_adopted(&doc);
-    assert_eq!((read.items.into_iter().map(|f| f.name).collect::<Vec<_>>(), read.left_out), (vec!["root".to_string()], 1));
-    assert_eq!(clear_password_values(&mut doc).unwrap(), 1, "the root's value is cleared, not refused");
-    assert_eq!(own_value(&doc, 3), None);
+    cleared_when_read_refused_when_left_out("the root's value", &form("", " /V (typed)"), 3, &[(2, b"T")]);
 }
 
 /// A kid that names another field as its `/Parent` is named up its own chain (#6570) and inherits
@@ -6690,11 +6711,12 @@ fn clear_form_finds_an_unread_default_where_the_reading_took_it() {
     }
 }
 
-/// A field of no type the walk reads, under a field left out for its name, isn't left out: it has
-/// no `/FT`, an unknown one, or one given by reference, and the walk never reads it. The value
-/// above it, which only a password field read shows, is cleared, as with nothing left out.
+/// A field of no type the walk reads, under a field left out for its name or left out for its own:
+/// it has no `/FT`, an unknown one, or one given by reference. What is held back with it is
+/// counted, so the save of a form with a password field refuses; read whole, the value above it,
+/// which only a password field shows, is cleared.
 #[test]
-fn a_field_the_walk_does_not_read_under_one_left_out_is_not_left_out() {
+fn a_field_the_walk_does_not_read_left_out_stops_the_save() {
     for ft in ["", " /FT /Foo", " /FT 7 0 R"] {
         let doc = document(&[
             "<< /Type /Catalog /AcroForm << /Fields [2 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
@@ -6705,22 +6727,16 @@ fn a_field_the_walk_does_not_read_under_one_left_out_is_not_left_out() {
             "<< /Type /Annot /Subtype /Widget /FT /Tx /T (other) /Ff 8192 /Rect [0 60 100 80] >>".into(),
             "/Tx".into(),
         ]);
-        for num in [None, Some(4), Some(5)] {
-            let mut doc = doc.clone();
-            if let Some(num) = num {
-                doc.update_dict(ObjRef::new(num, 0), |d| d.set(b"T".to_vec(), too_long(b'n'))).unwrap();
-            }
-            assert_eq!(fields_with_adopted(&doc).left_out, 0, "{ft:?}, {num:?}: nothing the walk reads is left out");
-            assert_eq!(clear_password_values(&mut doc).unwrap(), 1, "{ft:?}, {num:?}");
-            assert_eq!(own_value(&doc, 2), None, "{ft:?}, {num:?}: the value only the password field shows is cleared");
-        }
+        let read = refuses_when_left_out(ft, &doc, 1, &[(4, b"T"), (5, b"T")]);
+        assert_eq!(own_value(&read, 2), None, "{ft:?}: the value only the password field shows is cleared");
     }
 }
 
-/// Under a field left out for its name, a field deeper than the walk reads (64 levels) isn't left
-/// out, as it isn't read: its value stays in the file, as with nothing left out.
+/// Under a field left out for its name, a field deeper than the walk reads (64 levels) is held back
+/// too, and the save of a form with a password field refuses; read whole, the walk doesn't reach
+/// it, and the save goes ahead, as on `main`.
 #[test]
-fn a_field_past_the_walks_depth_under_one_left_out_is_not_left_out() {
+fn a_field_past_the_walks_depth_left_out_stops_the_save() {
     let levels = 70u32;
     let mut objs: Vec<String> = vec![
         "<< /Type /Catalog /AcroForm << /Fields [2 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
@@ -6731,15 +6747,7 @@ fn a_field_past_the_walks_depth_under_one_left_out_is_not_left_out() {
         let tail = if l + 1 == levels { " /V (deep) /Rect [0 0 100 20]".to_string() } else { format!(" /Kids [{} 0 R]", num + 1) };
         objs.push(format!("<< /T (l{l}) /Parent {} 0 R{tail} >>", num - 1));
     }
-    let doc = document(&objs);
-    for left_out in [false, true] {
-        let mut doc = doc.clone();
-        if left_out {
-            doc.update_dict(ObjRef::new(2, 0), |d| d.set(b"T".to_vec(), too_long(b'n'))).unwrap();
-        }
-        assert_eq!(fields_with_adopted(&doc).left_out, 0, "{left_out}");
-        assert_eq!(clear_password_values(&mut doc).unwrap(), 0, "{left_out}: not read, so not cleared, nor refused");
-    }
+    refuses_when_left_out("past the walk's depth", &document(&objs), 0, &[(2, b"T")]);
 }
 
 /// Under a field left out for its name, a node two fields list is the first's, as the walk reads
@@ -6834,33 +6842,154 @@ fn a_listed_field_under_one_left_out_is_not_read_as_a_root() {
     }
 }
 
-/// Fields left out that share their widgets record each widget once, however many of them list
-/// it, so the records grow with the widgets, not with the fields times the widgets; a widget a
-/// password field among them lists is recorded as a password field's, and its value stops the
-/// save. So for fields left out for their own text, and for their names.
+/// The shapes in which the walk under a field left out and the walk of the form parted (#6175
+/// reviews): with the top field left out for its name, the form has a password field and the
+/// reading is incomplete, so the save refuses; read whole, it clears what the walk reads.
 #[test]
-fn widgets_fields_left_out_share_are_recorded_once() {
-    let (k, w) = (40u32, 40u32);
-    let first_widget = 3 + k;
-    let list: String = (0..k).map(|i| format!("{} 0 R ", 3 + i)).collect();
-    let mut objs = vec![
-        format!("<< /Type /Catalog /AcroForm << /Fields [{list}] /DA (/Helv 0 Tf 0 g) >> >>"),
-        format!("[{}]", (0..w).map(|i| format!("{} 0 R", first_widget + i)).collect::<Vec<_>>().join(" ")),
-    ];
-    objs.extend((0..k).map(|i| format!("<< /T (f{i}) /FT /Tx{} /Kids 2 0 R >>", if i == 0 { "" } else { " /Ff 8192" })));
-    objs.extend((0..w).map(|i| format!("<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10]{} >>", if i == 0 { " /V (secret)" } else { "" })));
-    let doc = document(&objs);
-    for entry in [&b"TU"[..], b"T"] {
-        let mut doc = doc.clone();
-        let long = doc.add(too_long(b'n'));
-        for i in 0..k {
-            doc.update_dict(ObjRef::new(3 + i, 0), |d| d.set(entry.to_vec(), Object::Ref(long))).unwrap();
-        }
-        let reading = crate::read::enumerate(&doc);
-        assert_eq!(reading.left_out, usize::try_from(k).unwrap(), "{entry:?}");
-        assert!(reading.unread.len() <= usize::try_from(k + w).unwrap(), "{entry:?}: {} records", reading.unread.len());
-        assert!(has_password_values(&doc), "{entry:?}: a password field lists the widget holding a value");
+fn a_form_with_a_password_field_refuses_any_reading_left_incomplete() {
+    let cat = |fields: &str| format!("<< /Type /Catalog /AcroForm << /Fields [{fields}] /DA (/Helv 0 Tf 0 g) >> >>");
+    let other = || "<< /Type /Annot /Subtype /Widget /FT /Tx /T (other) /Ff 8192 /Rect [0 60 100 80] >>".to_string();
+    let mut shapes: Vec<(String, Vec<String>, usize, u32)> = Vec::new();
+    // M1c: a kid two fields list, its /Parent the second.
+    for (f1, f2, cleared) in [("8192", "0", 1), ("0", "8192", 0)] {
+        shapes.push((
+            format!("M1c {f1} {f2}"),
+            vec![
+                cat("2 0 R 6 0 R"),
+                "<< /T (r) /FT /Tx /Kids [3 0 R 4 0 R] >>".into(),
+                format!("<< /T (n1) /Ff {f1} /Parent 2 0 R /Kids [5 0 R] >>"),
+                format!("<< /T (n2) /Ff {f2} /Parent 2 0 R /Kids [5 0 R] >>"),
+                "<< /Type /Annot /Subtype /Widget /T (k) /Parent 4 0 R /V (secret) /Rect [0 0 100 20] >>".into(),
+                other(),
+            ],
+            cleared,
+            2,
+        ));
     }
+    // M7: a kid read under a password field, listed by a later field too.
+    shapes.push((
+        "M7".into(),
+        vec![
+            cat("2 0 R 6 0 R"),
+            "<< /T (p) /FT /Tx /V (secret) /Kids [3 0 R 4 0 R] >>".into(),
+            "<< /T (m) /Ff 8192 /Parent 2 0 R /Kids [5 0 R] >>".into(),
+            "<< /T (l) /Ff 0 /Parent 2 0 R /Kids [5 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Widget /T (k) /Parent 3 0 R /Rect [0 0 100 20] >>".into(),
+            other(),
+        ],
+        1,
+        2,
+    ));
+    // M4r: a descendant /Fields lists before its ancestors.
+    for x in [" /FT /Tx /V (sx)", " /V (sx)"] {
+        shapes.push((
+            format!("M4r{x}"),
+            vec![
+                cat("4 0 R 2 0 R 5 0 R"),
+                "<< /T (a) /FT /Tx /Ff 8192 /Kids [3 0 R] >>".into(),
+                "<< /T (n) /Parent 2 0 R /Kids [4 0 R] >>".into(),
+                format!("<< /Type /Annot /Subtype /Widget /T (x){x} /Parent 3 0 R /Rect [0 0 100 20] >>"),
+                other(),
+            ],
+            0,
+            2,
+        ));
+    }
+    // X1: a page widget /Fields lists, whose /Parent doesn't list it in /Kids.
+    for (what, p, annots, extra) in [
+        ("untyped", "<< /T (p) >>", "5 0 R 6 0 R", None),
+        ("merged", "<< /Type /Annot /Subtype /Widget /T (p) /FT /Tx /Rect [0 90 100 110] /P 3 0 R >>", "4 0 R 5 0 R 6 0 R", None),
+        (
+            "a branch",
+            "<< /T (p) /FT /Tx /Kids [7 0 R] >>",
+            "5 0 R 6 0 R 7 0 R",
+            Some("<< /Type /Annot /Subtype /Widget /T (kid) /Parent 4 0 R /Rect [0 30 100 50] /P 3 0 R >>"),
+        ),
+    ] {
+        let mut objs = vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+            format!("<< /Type /Page /Parent 2 0 R /Annots [{annots}] >>"),
+            p.into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /Ff 8192 /V (secret) /Parent 4 0 R /Rect [0 0 100 20] /P 3 0 R >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (other) /Ff 8192 /Rect [0 60 100 80] /P 3 0 R >>".into(),
+        ];
+        objs.extend(extra.map(String::from));
+        shapes.push((format!("X1 {what}"), objs, 1, 4));
+    }
+    // X1k: a nameless widget kid with a type of its own, under a field the walk doesn't read.
+    for (p, fields) in [
+        ("<< /T (p) /Kids [3 0 R] >>", "2 0 R 3 0 R 4 0 R"),
+        ("<< /T (p) /Kids [3 0 R] >>", "3 0 R 2 0 R 4 0 R"),
+        ("<< /T (p) /FT /Foo /Kids [3 0 R] >>", "2 0 R 3 0 R 4 0 R"),
+    ] {
+        shapes.push((
+            format!("X1k {p} [{fields}]"),
+            vec![
+                cat(fields),
+                p.into(),
+                "<< /Type /Annot /Subtype /Widget /FT /Tx /Ff 8192 /V (secret) /Parent 2 0 R /Rect [0 0 100 20] >>".into(),
+                other(),
+            ],
+            1,
+            2,
+        ));
+    }
+    // R1: a root naming n, listed in n's /Kids before a named kid; both list x.
+    shapes.push((
+        "R1".into(),
+        vec![
+            cat("2 0 R 3 0 R 6 0 R"),
+            "<< /T (n) /FT /Tx /Kids [3 0 R 4 0 R] >>".into(),
+            "<< /T (r) /Parent 2 0 R /Ff 8192 /Kids [5 0 R] >>".into(),
+            "<< /T (k) /Parent 2 0 R /Ff 0 /Kids [5 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Widget /T (x) /Parent 3 0 R /V (secret) /Rect [0 0 100 20] >>".into(),
+            other(),
+        ],
+        1,
+        2,
+    ));
+    // D64: a /Kids array two fields share, reached first 64 levels down.
+    {
+        let levels = 64u32;
+        let first = 7u32;
+        let mut objs = vec![
+            cat("2 0 R 6 0 R"),
+            format!("<< /T (r) /FT /Tx /Ff 8192 /Kids [{first} 0 R 3 0 R] >>"),
+            "<< /T (b) /Parent 2 0 R /Kids 4 0 R >>".into(),
+            "[5 0 R]".into(),
+            "<< /Type /Annot /Subtype /Widget /T (k) /Parent 3 0 R /V (secret) /Rect [0 0 100 20] >>".into(),
+            other(),
+        ];
+        for i in 0..levels {
+            let num = first + i;
+            let parent = if i == 0 { 2 } else { num - 1 };
+            let kids = if i + 1 == levels { "4 0 R".to_string() } else { format!("[{} 0 R]", num + 1) };
+            objs.push(format!("<< /T (c{i}) /Parent {parent} 0 R /Kids {kids} >>"));
+        }
+        shapes.push(("D64".into(), objs, 1, 2));
+    }
+    for (what, objs, cleared, top) in shapes {
+        refuses_when_left_out(&what, &document(&objs), cleared, &[(top, b"T")]);
+    }
+}
+
+/// A page widget naming a field as its `/Parent`, which the field's `/Kids` leave out, is the
+/// field's (#6446): with the field left out for its name it is held back with it, so `/Fields`
+/// listing it doesn't read it as a field of its own.
+#[test]
+fn a_page_widget_naming_a_field_left_out_is_held_back_with_it() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+        "<< /T (p) /FT /Tx >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Parent 4 0 R /Rect [0 0 100 20] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (other) /Rect [0 60 100 80] /P 3 0 R >>".into(),
+    ]);
+    assert_eq!(fields(&doc).into_iter().map(|f| f.name).collect::<Vec<_>>(), ["p", "other"]);
+    doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"T".to_vec(), too_long(b'n'))).unwrap();
+    assert_eq!(fields(&doc).into_iter().map(|f| f.name).collect::<Vec<_>>(), ["other"]);
 }
 
 /// #4018: a value that doesn't fit its box at the field's font size is reported (it is drawn cut

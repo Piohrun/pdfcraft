@@ -1,6 +1,6 @@
 use super::appearances::{declares_pdfa, need_appearances};
 use super::read::{
-    Reading, Unread, acroform, enumerate, field_flags, fields, held, listed_indices, listing_fields_named, page_refs, referred, selected_options,
+    Reading, acroform, enumerate, field_flags, fields, held, listed_indices, listing_fields_named, page_refs, referred, selected_options,
 };
 use super::{
     Dict, Document, Field, FieldEvent, FieldKind, FieldValue, FormError, NoScripts, ObjRef, Object, PdfString, Scripts, Widget, af, appearance,
@@ -671,20 +671,24 @@ struct Passwords {
     reading: Reading,
     /// The fields read that hold such a value ([`password_fields`]).
     holding: Vec<Field>,
-    /// A field the reading left out may hold one ([`left_out_password_value`]).
-    left_out: bool,
+    /// The reading left something out (`Fields::left_out`): a field, or a widget or a field under
+    /// one, past its text allowance. A save can't tell what it holds, or clear it.
+    incomplete: bool,
 }
 
-/// [`Passwords`]; `None` when no field dictionary sets the flag, so a save of a form without one
-/// doesn't read the form.
+/// [`Passwords`]; `None` when no field dictionary sets the flag ([`has_password_flag`], which doesn't
+/// go through the reading), so a save of a form without one doesn't read the form, and a reading
+/// that left something out of it is no reason to refuse.
 fn passwords(doc: &Document) -> Option<Passwords> {
     if !has_password_flag(doc) {
         return None;
     }
     let reading = enumerate(doc);
     let holding = password_fields(doc, &reading);
-    let left_out = left_out_password_value(doc, &reading.unread);
-    Some(Passwords { reading, holding, left_out })
+    // Everything the reading holds back is counted: a field left out for its own text counts
+    // itself, and one left out for its name at least itself.
+    let incomplete = reading.left_out > 0;
+    Some(Passwords { reading, holding, incomplete })
 }
 
 fn is_password(f: &Field) -> bool {
@@ -700,20 +704,6 @@ fn password_fields(doc: &Document, reading: &Reading) -> Vec<Field> {
     let typed = |f: &Field| f.value.iter().any(|v| !v.is_empty()) && f.value.first() != f.default.first();
     let unread = |f: &Field| f.value.is_empty() && unread_value(doc, reading, f.obj, b"V");
     reading.items.iter().filter(|f| is_password(f) && (typed(f) || unread(f) || on_widget(f))).cloned().collect()
-}
-
-/// Whether a field the reading left out, or a field or widget under one ([`Reading::unread`]), is a
-/// text field with the Password flag and holds a value, by the type, flags and `/V` the reading
-/// would have read for it (a widget's own `/V` included). A save can't clear such a value through
-/// the fields read. A value equal to the default counts too: comparing them could copy a long value
-/// once for each such field.
-fn left_out_password_value(doc: &Document, unread: &[Unread]) -> bool {
-    unread.iter().any(|u| u.password && u.value.is_some_and(|v| own_value_holds(doc, v)))
-}
-
-/// Whether field `r`'s own `/V` holds a value ([`holds_value`]).
-fn own_value_holds(doc: &Document, r: ObjRef) -> bool {
-    holds_own(doc, r, b"V")
 }
 
 /// Whether field `r`'s own `key` (`/V` or `/DV`) holds a value ([`holds_value`]).
@@ -751,10 +741,11 @@ pub(crate) fn has_password_flag(doc: &Document) -> bool {
     })
 }
 
-/// Whether any text field with the Password flag holds a value in `doc`, or may: one the form's
-/// reading left out, or whose value it didn't copy, counts.
+/// Whether any text field with the Password flag holds a value in `doc`, or may: one whose value
+/// the form's reading didn't copy counts, and so does any form with such a field whose reading
+/// left something out, as what that holds isn't known.
 pub fn has_password_values(doc: &Document) -> bool {
-    passwords(doc).is_some_and(|p| !p.holding.is_empty() || p.left_out)
+    passwords(doc).is_some_and(|p| !p.holding.is_empty() || p.incomplete)
 }
 
 /// The typed values of the text fields with the Password flag, as (name, text) pairs, for
@@ -804,21 +795,20 @@ fn field_chain(doc: &Document, r: ObjRef) -> Vec<ObjRef> {
 ///
 /// A value can sit on the field, on one of its widgets, or on an ancestor it inherits from
 /// (`/V` is inheritable). Each is removed; an ancestor's only when every field inheriting from it
-/// is such a password field, and no field the reading left out that may inherit it, other than
-/// one, is under it. Where an ancestor's value
-/// is shared with other fields and stays, the
+/// is such a password field. Where an ancestor's value is shared with other fields and stays, the
 /// password field gets an empty value of its own so it no longer inherits it. Returns how many
 /// fields were cleared.
 ///
 /// A value the form's reading didn't copy, its allowance spent, is cleared all the same; a default
-/// it didn't copy isn't restored, and the field is left empty. A field the reading left out
-/// (`Fields::left_out`) that holds such a value can't be cleared and redrawn without it: that is
-/// an error, and the file isn't written.
+/// it didn't copy isn't restored, and the field is left empty. When the reading left anything out
+/// (`Fields::left_out`), a field past its text allowance or what is under one, what that holds
+/// isn't known, so neither that its value can be cleared nor that an ancestor's value is the
+/// password fields' alone: that is an error, and the file isn't written.
 pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
-    let Some(Passwords { reading, holding: targets, left_out }) = passwords(doc) else { return Ok(0) };
-    if left_out {
+    let Some(Passwords { reading, holding: targets, incomplete }) = passwords(doc) else { return Ok(0) };
+    if incomplete {
         return Err(FormError::Invalid(
-            "a password field holds a value past the text one reading of this form copies, so it can't be cleared, and the file isn't written".into(),
+            "this form has a password field, and fields past the text one reading of it copies, so a password value can't be known cleared, and the file isn't written".into(),
         ));
     }
     if targets.is_empty() {
@@ -827,10 +817,6 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
     // Each field's ancestors, found once: only values change below, never `/Parent` (#3943
     // review: walking them again for every ancestor of every target was quadratic).
     let chains: Vec<(bool, Vec<ObjRef>)> = reading.items.iter().map(|g| (is_password(g), field_chain(doc, g.obj))).collect();
-    // The fields whose value a field the reading left out shows, other than a password field: the
-    // nearest at or above it, as the reading would have inherited it, whose `/V` isn't null (ISO
-    // 32000-2 §7.3.9). A password field left out that holds a value has already stopped the save.
-    let above_unread: std::collections::HashSet<ObjRef> = reading.unread.iter().filter(|u| !u.password).filter_map(|u| u.shows).collect();
     for f in &targets {
         let chain = field_chain(doc, f.obj);
         for w in &f.widgets {
@@ -848,7 +834,7 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
             if doc.get(*a).as_dict().is_none_or(|d| d.get(b"V").is_none()) {
                 continue;
             }
-            let exclusive = !above_unread.contains(a) && chains.iter().filter(|(_, chain)| chain.contains(a)).all(|(password, _)| *password);
+            let exclusive = chains.iter().filter(|(_, chain)| chain.contains(a)).all(|(password, _)| *password);
             if exclusive {
                 doc.update_dict(*a, |d| {
                     d.remove(b"V");

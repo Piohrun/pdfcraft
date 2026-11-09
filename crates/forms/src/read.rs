@@ -638,12 +638,8 @@ struct Inherited {
     /// The fields that carry the `/V` and `/DV` that apply.
     v: Option<Arc<Object>>,
     dv: Option<Arc<Object>>,
-    /// Where `v` is, and the nearest field at or above this one whose `/V` isn't null, whose value
-    /// it shows (a null entry is an absent one, ISO 32000-2 §7.3.9): what a field left out would
-    /// have been read with ([`Unread`]).
+    /// Where `v` and `dv` are ([`Reading::values_at`]).
     v_at: Option<ObjRef>,
-    shown_at: Option<ObjRef>,
-    /// Where `dv` is.
     dv_at: Option<ObjRef>,
     da: Option<Rc<str>>,
     /// The `/DA` that applies didn't fit the text allowance: a field that would draw with it is
@@ -668,37 +664,12 @@ impl Inherited {
         if let Some(ff) = field_flags(doc, d) {
             self.ff = Some(ff);
         }
-        if let Some(v) = d.get(b"V") {
+        if d.contains(b"V") {
             (self.v, self.v_at) = (Some(obj.clone()), Some(r));
-            if !matches!(&*held(doc, v), Object::Null) {
-                self.shown_at = Some(r);
-            }
         }
         if d.contains(b"DV") {
             (self.dv, self.dv_at) = (Some(obj.clone()), Some(r));
         }
-    }
-
-    /// Whether a field with this `/FT` is one the walk reads (`Btn`, `Ch`, `Sig`, `Tx`).
-    fn reads_type(&self) -> bool {
-        matches!(self.ft.as_deref(), Some(b"Btn" | b"Ch" | b"Sig" | b"Tx"))
-    }
-
-    /// Whether a field with this is a text field with the Password flag.
-    fn is_password(&self) -> bool {
-        self.ft.as_deref() == Some(b"Tx") && self.ff.unwrap_or(0) & flags::PASSWORD != 0
-    }
-
-    /// The record of a field left out that would have been read with this.
-    fn unread(&self) -> Unread {
-        Unread { password: self.is_password(), value: self.v_at, shows: self.shown_at }
-    }
-
-    /// The record of `w`, a widget of the field left out that inherits this: its field's type and
-    /// flags (the walk doesn't read a widget's own), and its own `/V`, which a save clears.
-    fn unread_widget(&self, doc: &Document, w: ObjRef) -> Unread {
-        let own = doc.get(w).as_dict().and_then(|d| d.get(b"V").map(|v| !matches!(&*held(doc, v), Object::Null)));
-        Unread { value: own.map(|_| w), shows: own.filter(|shown| *shown).map(|_| w), ..self.unread() }
     }
 
     /// `o`, a field's or the form's `/DA`, as the one that applies from here down, charged to
@@ -751,25 +722,9 @@ pub(crate) struct Reading {
     pub(crate) items: Vec<Field>,
     pub(crate) adopted_page_fields: usize,
     pub(crate) left_out: usize,
-    /// The fields left out, and the fields and widgets under them, each with what the walk would
-    /// have read for it: a save can't clear what they hold through the fields read. A widget a
-    /// later field read lists too is among them, as its `/Parent` may still be the field left out.
-    pub(crate) unread: Vec<Unread>,
     /// For each field read, the fields that carry the `/V` and the `/DV` it was read with: where a
     /// value its allowance didn't copy is, as the walk inherits it.
     pub(crate) values_at: std::collections::HashMap<ObjRef, (Option<ObjRef>, Option<ObjRef>)>,
-}
-
-/// A field the reading left out, or a widget of one, with what the walk would have read for it,
-/// inherited down `/Kids` as the walk inherits it.
-pub(crate) struct Unread {
-    /// A text field with the Password flag, by the `/FT` and `/Ff` it would have been read with (a
-    /// widget's are its field's).
-    pub(crate) password: bool,
-    /// The field whose `/V` it would have been read with, a null one included; a widget's own.
-    pub(crate) value: Option<ObjRef>,
-    /// The nearest field at or above it whose `/V` isn't null: the value it shows.
-    pub(crate) shows: Option<ObjRef>,
 }
 
 #[cfg(test)]
@@ -819,8 +774,6 @@ pub(crate) fn enumerate(doc: &Document) -> Reading {
         widgets: std::collections::HashSet::new(),
         withheld: std::collections::HashSet::new(),
         left_out: 0,
-        unread: Vec::new(),
-        widget_records: std::collections::HashMap::new(),
         values_at: std::collections::HashMap::new(),
         withheld_arrays: std::collections::HashMap::new(),
         roots: listed_roots.iter().copied().collect(),
@@ -866,7 +819,7 @@ pub(crate) fn enumerate(doc: &Document) -> Reading {
     adopt_page_fields(doc, &pages, &base, &page_of, &mut seen, &mut out);
     let adopted = out.len() - listed;
     rank_tabs(doc, &pages, &annot_index, &mut out);
-    Reading { items: out, adopted_page_fields: adopted, left_out: seen.left_out, unread: seen.unread, values_at: seen.values_at }
+    Reading { items: out, adopted_page_fields: adopted, left_out: seen.left_out, values_at: seen.values_at }
 }
 
 /// Widget annotations no `/Fields` entry reaches are adopted as fields, as Acrobat and the
@@ -950,18 +903,12 @@ struct Seen {
     withheld: std::collections::HashSet<ObjRef>,
     /// Fields left out of the reading for text that didn't fit ([`Fields::left_out`]).
     left_out: usize,
-    /// Those fields, the fields under them and their widgets, each with what it would have been
-    /// read with ([`Reading::unread`]).
-    unread: Vec<Unread>,
-    /// Where each widget's record is in `unread`: one for each widget, however many fields left out
-    /// list it.
-    widget_records: std::collections::HashMap<ObjRef, usize>,
     /// [`Reading::values_at`].
     values_at: std::collections::HashMap<ObjRef, (Option<ObjRef>, Option<ObjRef>)>,
     /// The `/Kids` arrays given by reference that [`withhold_below`] has read, by each reference on
-    /// the way to them, with what each holds; a chain that ends nowhere, by its first reference, as
-    /// holding nothing.
-    withheld_arrays: std::collections::HashMap<ObjRef, Rc<KidsFacts>>,
+    /// the way to them, and whether each makes its node a branch; a chain that ends nowhere, by its
+    /// first reference, as not.
+    withheld_arrays: std::collections::HashMap<ObjRef, bool>,
     /// The fields `/Fields` lists: root fields, with no ancestors (ISO 32000-2 §12.7.3, Table 224).
     roots: std::collections::HashSet<ObjRef>,
     /// The fields being walked, outermost first, whose `/Kids` are being read.
@@ -989,174 +936,98 @@ fn on_state_of(doc: &Document, wd: &Dict, text: &mut Allowance) -> Option<String
     text.copy(k.len(), || name_text(k))
 }
 
-/// Leaves out a field read up to its own text, which inherits `inh`, with `claimed`, its widgets:
-/// each widget is withheld, for a later field that lists it to take, and the field and each widget
-/// are recorded with what the walk would have read for them, a widget once ([`Seen::record_widget`]).
-fn leave_out(doc: &Document, inh: &Inherited, claimed: std::collections::HashSet<ObjRef>, seen: &mut Seen) {
-    seen.unread.push(inh.unread());
-    for w in claimed {
-        seen.record_widget(doc, inh, w);
-        seen.withheld.insert(w);
-    }
+/// Leaves out a field read up to its own text, with `claimed`, its widgets, which are withheld: a
+/// later field that lists one takes it, but none is adopted as a field of its own.
+fn leave_out(claimed: std::collections::HashSet<ObjRef>, seen: &mut Seen) {
+    seen.withheld.extend(claimed);
     seen.left_out = seen.left_out.saturating_add(1);
 }
 
-impl Seen {
-    /// Records `w`, a widget of a field left out that inherits `inh`, once however many fields left
-    /// out list it: a text field with the Password flag among them makes it a password field's.
-    fn record_widget(&mut self, doc: &Document, inh: &Inherited, w: ObjRef) {
-        match self.widget_records.get(&w) {
-            Some(&i) => {
-                if let Some(u) = self.unread.get_mut(i) {
-                    u.password |= inh.is_password();
-                }
-            }
-            None => {
-                self.widget_records.insert(w, self.unread.len());
-                self.unread.push(inh.unread_widget(doc, w));
-            }
-        }
-    }
-}
-
-/// What a `/Kids` array holds, for the walk under fields left out ([`withhold_below`]): read once
-/// in a reading, however many nodes list it.
-#[derive(Default)]
-struct KidsFacts {
-    /// Its named entries that aren't roots `/Fields` lists: kids of any node that lists them.
-    named: Vec<ObjRef>,
-    /// Its named entries that are such roots, by the `/Parent` each names: a root is a kid only of
-    /// the node it names ([`not_a_child`]).
-    roots: std::collections::HashMap<ObjRef, Vec<ObjRef>>,
-    /// Its nameless entries: the widgets of a node that lists them.
-    widgets: Vec<ObjRef>,
-    /// Whether one of those is a `/Widget`, which makes a node with named kids a field too.
-    widget: bool,
-    /// Whether its widgets are recorded: 1 for a field, 2 for a password field.
-    recorded: std::cell::Cell<u8>,
-}
-
-impl KidsFacts {
-    fn of(doc: &Document, list: &Object, roots: &std::collections::HashSet<ObjRef>) -> Self {
-        let kids: Vec<ObjRef> = list.as_array().into_iter().flatten().filter_map(Object::as_ref).collect();
-        #[cfg(test)]
-        WITHHELD_ENTRIES.with(|c| c.set(c.get() + kids.len()));
-        let mut facts = KidsFacts::default();
-        for k in kids {
-            let obj = doc.get(k);
-            let Some(d) = obj.as_dict() else { continue };
-            if !d.contains(b"T") {
-                facts.widget |= d.name(b"Subtype") == Some(b"Widget");
-                facts.widgets.push(k);
-            } else if !roots.contains(&k) {
-                facts.named.push(k);
-            } else if let Some(p) = d.reference(b"Parent") {
-                facts.roots.entry(p).or_default().push(k);
-            }
-        }
-        facts
-    }
-}
-
-/// What the `/Kids` of node `d` hold, and whether this is the first node to list them in the
-/// reading. A `/Kids` array given by reference is read once in a reading: the references on the
-/// way to it, followed as far as `Document::resolve` follows them, are noted with what it holds,
-/// and a node naming one of them loads nothing. A chain that ends nowhere notes only its first.
-fn kids_facts(doc: &Document, d: &Dict, seen: &mut Seen) -> (Rc<KidsFacts>, bool) {
-    match d.get(b"Kids") {
-        Some(Object::Ref(first)) => {
-            let (mut r, mut hops) = (*first, Vec::new());
-            for _ in 0..=32 {
-                if let Some(known) = seen.withheld_arrays.get(&r) {
-                    let known = known.clone();
-                    seen.withheld_arrays.extend(hops.into_iter().map(|hop| (hop, known.clone())));
-                    return (known, false);
-                }
-                hops.push(r);
-                let o = doc.get(r);
-                #[cfg(test)]
-                WITHHELD_LOADS.with(|c| c.set(c.get() + 1));
-                match &*o {
-                    Object::Ref(next) => r = *next,
-                    list => {
-                        let facts = Rc::new(KidsFacts::of(doc, list, &seen.roots));
-                        seen.withheld_arrays.extend(hops.into_iter().map(|hop| (hop, facts.clone())));
-                        return (facts, true);
-                    }
-                }
-            }
-            let none = Rc::new(KidsFacts::default());
-            seen.withheld_arrays.extend(hops.first().map(|&hop| (hop, none.clone())));
-            (none, true)
-        }
-        Some(list) => (Rc::new(KidsFacts::of(doc, list, &seen.roots)), true),
-        None => (Rc::new(KidsFacts::default()), true),
-    }
-}
-
-/// Withholds the fields and widgets under `r`, a field left out of the reading for its name at
-/// `depth` of the walk, which inherits `inh`: none is adopted from the page as a field of its own,
-/// and a later field in the tree that lists one still takes it. They are visited as [`walk`] reads
-/// them: depth first, each node's kids in the order they are listed, a node two fields list under
-/// the first, no deeper than the walk reads, and passing over a kid that is no child of the node
-/// listing it ([`not_a_child`]). Each is visited once, its text unread, and each field of a type
-/// the walk reads, and each of its widgets, is recorded with what the walk would have read for it,
-/// inherited down `/Kids` as the walk inherits it ([`Reading::unread`]). How many such fields it
-/// holds, `r` among them: those with a name that aren't branches.
-fn withhold_below(doc: &Document, r: ObjRef, inh: &Inherited, depth: usize, seen: &mut Seen) -> usize {
+/// Withholds the fields and widgets under `r`, a field left out of the reading for its name: none
+/// is adopted from the page as a field of its own, or read from `/Fields` as a root, and a later
+/// field in the tree that lists one still takes it as a widget. Each is visited once, its text
+/// unread, so the walk ends however the kids loop. How many terminal fields it holds, `r` among
+/// them: those with a name that aren't branches ([`withhold_kids`]).
+///
+/// It holds back everything `r`'s `/Kids` reach and the page widgets naming any of it, which is
+/// all [`walk`] would read under `r` and may be more: a root `/Fields` lists that the walk passes
+/// over as no child of the field listing it (`not_a_child`), a node past the walk's depth, or a
+/// node under a widget. That direction is the safe one. A node held back that the walk would have
+/// read elsewhere is only missing from the reading, which already counts a field left out, so a
+/// save of a form with a password field refuses (`clear_password_values`); a node the walk would
+/// read under `r` that wasn't held back would be read from `/Fields` or adopted from the page as a
+/// root, under a name without `r`'s part.
+fn withhold_below(doc: &Document, r: ObjRef, seen: &mut Seen) -> usize {
     let mut terminal = 0usize;
-    let mut stack = vec![(r, inh.clone(), depth)];
-    // The nodes from `r` down to the one visited, for the loops `not_a_child` passes over.
-    let mut path: Vec<ObjRef> = Vec::new();
-    while let Some((n, inh, at)) = stack.pop() {
-        if at > 64 || !seen.withheld.insert(n) {
-            continue;
-        }
-        path.truncate(at.saturating_sub(depth));
-        path.push(n);
+    seen.withheld.insert(r);
+    let mut stack = vec![r];
+    while let Some(n) = stack.pop() {
         let node = doc.get(n);
         let Some(d) = node.as_dict() else { continue };
-        let (facts, first) = kids_facts(doc, d, seen);
-        // A loop is no child: the node itself, or one above it, which `path` and the walk's own
-        // path hold.
-        let child = |k: &ObjRef| !path.contains(k) && !seen.path.contains(k);
-        let roots = facts.roots.get(&n).map(Vec::as_slice).unwrap_or_default();
-        let branch = !facts.widget && (facts.named.iter().any(child) || roots.iter().any(child));
-        // Its named kids to visit: those this node lists first, and roots that name it.
-        let mut kids: Vec<ObjRef> = if first { facts.named.iter().copied().filter(child).collect() } else { Vec::new() };
-        kids.extend(roots.iter().copied().filter(child));
-        let typed = inh.reads_type();
-        let needed = if inh.is_password() { 2 } else { 1 };
-        if first {
-            seen.withheld.extend(facts.widgets.iter().copied());
-        }
-        if typed && facts.recorded.get() < needed {
-            for &w in &facts.widgets {
-                seen.record_widget(doc, &inh, w);
+        let branch = match d.get(b"Kids") {
+            // A `/Kids` array given by reference is read once in a reading: the references on the
+            // way to it, followed as far as `Document::resolve` follows them, are noted with
+            // whether it makes a branch once the walk reaches it, and a node naming one of them
+            // loads nothing. A chain that ends nowhere notes only its first.
+            Some(Object::Ref(first)) => {
+                let (mut r, mut hops, mut branch) = (*first, Vec::new(), None);
+                for _ in 0..=32 {
+                    if let Some(&known) = seen.withheld_arrays.get(&r) {
+                        branch = Some(known);
+                        break;
+                    }
+                    hops.push(r);
+                    let o = doc.get(r);
+                    #[cfg(test)]
+                    WITHHELD_LOADS.with(|c| c.set(c.get() + 1));
+                    match &*o {
+                        Object::Ref(next) => r = *next,
+                        list => {
+                            branch = Some(withhold_kids(doc, list, seen, &mut stack));
+                            break;
+                        }
+                    }
+                }
+                match branch {
+                    Some(known) => seen.withheld_arrays.extend(hops.into_iter().map(|hop| (hop, known))),
+                    None => seen.withheld_arrays.extend(hops.first().map(|&hop| (hop, false))),
+                }
+                branch.unwrap_or(false)
             }
-            facts.recorded.set(needed);
-        }
+            Some(list) => withhold_kids(doc, list, seen, &mut stack),
+            None => false,
+        };
         // A page widget naming `n` as its `/Parent` is its widget even when its `/Kids` leave it
-        // out, as the walk reads it.
-        let by_parent: Vec<ObjRef> = seen.by_parent.get(&n).cloned().unwrap_or_default();
-        for w in by_parent {
-            seen.withheld.insert(w);
-            if typed {
-                seen.record_widget(doc, &inh, w);
+        // out, as [`walk`] reads it.
+        for &w in seen.by_parent.get(&n).into_iter().flatten() {
+            if seen.withheld.insert(w) {
+                stack.push(w);
             }
         }
-        if !branch && d.contains(b"T") && typed {
+        if !branch && d.contains(b"T") {
             terminal = terminal.saturating_add(1);
-            seen.unread.push(inh.unread());
-        }
-        // Pushed last first, so they are visited in the order listed.
-        for k in kids.into_iter().rev() {
-            let mut kid = inh.clone();
-            kid.take(doc, k, &doc.get(k));
-            stack.push((k, kid, at.saturating_add(1)));
         }
     }
     terminal
+}
+
+/// Withholds the kids `list` holds, pushing those not withheld before onto `stack`; whether they
+/// make their node a branch rather than a field: one of them has a name, and none is a widget
+/// beside it, which [`walk`] reads as the node's own.
+fn withhold_kids(doc: &Document, list: &Object, seen: &mut Seen, stack: &mut Vec<ObjRef>) -> bool {
+    let kids: Vec<ObjRef> = list.as_array().into_iter().flatten().filter_map(Object::as_ref).collect();
+    #[cfg(test)]
+    WITHHELD_ENTRIES.with(|c| c.set(c.get() + kids.len()));
+    let named = |k: &ObjRef| doc.get(*k).as_dict().is_some_and(|d| d.contains(b"T"));
+    // `/Subtype` only when direct, as [`walk`] reads it to keep the widgets beside named kids.
+    let widget = |k: &ObjRef| doc.get(*k).as_dict().is_some_and(|d| !d.contains(b"T") && d.name(b"Subtype") == Some(b"Widget"));
+    let branch = kids.iter().any(named) && !kids.iter().any(widget);
+    for k in kids {
+        if seen.withheld.insert(k) {
+            stack.push(k);
+        }
+    }
+    branch
 }
 
 #[cfg(test)]
@@ -1217,7 +1088,7 @@ fn walk(
     // A name that doesn't fit leaves the field out, with the fields under it, whose full names
     // need it; a `/DA` that doesn't fit, only the fields that would draw with it.
     if inh.name_refused || seen.text.refusals() != refusals {
-        let fields = withhold_below(doc, r, &inh, depth, seen);
+        let fields = withhold_below(doc, r, seen).max(1);
         seen.left_out = seen.left_out.saturating_add(fields);
         return;
     }
@@ -1299,7 +1170,7 @@ fn walk(
     // A field that would draw with a `/DA` that didn't fit is left out before it reads its
     // scripts; a signature, drawn without one, is read.
     if inh.da_refused && kind != FieldKind::Signature {
-        leave_out(doc, &inh, claimed, seen);
+        leave_out(claimed, seen);
         return;
     }
     let refusals = seen.text.refusals();
@@ -1375,7 +1246,7 @@ fn walk(
     text.take(inh.name.len());
     text.take(field_da.len());
     if text.refusals() != refusals {
-        leave_out(doc, &inh, claimed, seen);
+        leave_out(claimed, seen);
         return;
     }
     seen.widgets.extend(claimed);
