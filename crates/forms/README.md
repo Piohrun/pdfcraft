@@ -50,17 +50,20 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   `/DA` that doesn't fit; its widgets go to a later field that lists them. `fields_with_adopted`
   counts the fields left out (`Fields::left_out`): opening the file records them as a repair, and
   redaction refuses to remove a widget no field read owns. Clear form (`reset`) leaves a field
-  whose default the reading didn't reach as it is, rather than emptying it. A save still clears a
-  password value past the reading's allowances (`clear_password_values`), and refuses, so writes
+  whose default the reading didn't reach as it is, rather than emptying it, looking for that
+  default where the reading took it, down `/Kids`. A save still clears a password value past the
+  reading's allowances (`clear_password_values`), looked for the same way, and refuses, so writes
   no file, when such a value is in a field the reading left out, or on one of its widgets: the
-  reading records each field and widget it leaves out with the type, flags and value it would have
-  read for it, inherited down `/Kids` as it inherits them, and the save decides by those. The
-  open document doesn't keep a password value past them after a save. A password value the reading doesn't see stays in the
-  files written, as on `main`: for example that of a field whose `/FT` is given by reference,
-  unless a field above it gives `/Tx` directly, or that is nested past 64 levels, a value of the
-  text "Off", which reads as none, a parent's value under a kid whose `/V` is null, which the
-  reading takes for no value, a value 64 levels above a password field, and a parent's value a
-  password field inherits when another field read under it has a value of its own.
+  reading records each field and widget it leaves out with the type, flags and value it would
+  have read for it, inherited down `/Kids` and visited in the order it reads them, a field of no
+  type it reads or past 64 levels not among them, and the save decides by those records. The open
+  document doesn't keep a password value past them after a save. A password value the reading
+  doesn't see stays in the files written, as on `main`: for example that of a field whose `/FT`
+  is given by reference, unless a field above it gives `/Tx` directly, or that is nested past 64
+  levels, a value of the text "Off", which reads as none, a parent's value under a kid whose `/V`
+  is null, which the reading takes for no value, a value 64 levels above a password field, and a
+  parent's value a password field inherits when another field read under it has a value of its
+  own.
   `field_actions`, `document_scripts` and renaming a field read within the same allowances;
   `field_actions` lists an action whose script or text doesn't fit as an action of another type,
   which `set_field_actions` keeps as it is.

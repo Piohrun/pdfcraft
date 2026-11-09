@@ -682,7 +682,7 @@ fn passwords(doc: &Document) -> Option<Passwords> {
         return None;
     }
     let reading = enumerate(doc);
-    let holding = password_fields(doc, &reading.items);
+    let holding = password_fields(doc, &reading);
     let left_out = left_out_password_value(doc, &reading.unread);
     Some(Passwords { reading, holding, left_out })
 }
@@ -695,11 +695,11 @@ fn is_password(f: &Field) -> bool {
 /// (`/V`, inherited or their own) is not empty and not their default value (`/DV`, which the
 /// form's author wrote and a save restores), or wasn't copied by the reading, its allowance spent,
 /// so isn't known to be either; or one of whose separate widgets carries a `/V`.
-fn password_fields(doc: &Document, read: &[Field]) -> Vec<Field> {
+fn password_fields(doc: &Document, reading: &Reading) -> Vec<Field> {
     let on_widget = |f: &Field| f.widgets.iter().any(|w| w.obj != f.obj && doc.get(w.obj).as_dict().is_some_and(|d| d.get(b"V").is_some()));
     let typed = |f: &Field| f.value.iter().any(|v| !v.is_empty()) && f.value.first() != f.default.first();
-    let unread = |f: &Field| f.value.is_empty() && unread_value(doc, f.obj, b"V");
-    read.iter().filter(|f| is_password(f) && (typed(f) || unread(f) || on_widget(f))).cloned().collect()
+    let unread = |f: &Field| f.value.is_empty() && unread_value(doc, reading, f.obj, b"V");
+    reading.items.iter().filter(|f| is_password(f) && (typed(f) || unread(f) || on_widget(f))).cloned().collect()
 }
 
 /// Whether a field the reading left out, or a field or widget under one ([`Reading::unread`]), is a
@@ -713,7 +713,12 @@ fn left_out_password_value(doc: &Document, unread: &[Unread]) -> bool {
 
 /// Whether field `r`'s own `/V` holds a value ([`holds_value`]).
 fn own_value_holds(doc: &Document, r: ObjRef) -> bool {
-    doc.get(r).as_dict().and_then(|d| d.get(b"V").map(|v| holds_value(doc, v))).unwrap_or(false)
+    holds_own(doc, r, b"V")
+}
+
+/// Whether field `r`'s own `key` (`/V` or `/DV`) holds a value ([`holds_value`]).
+fn holds_own(doc: &Document, r: ObjRef, key: &[u8]) -> bool {
+    doc.get(r).as_dict().and_then(|d| d.get(key).map(|v| holds_value(doc, v))).unwrap_or(false)
 }
 
 /// Whether any field dictionary sets the Password flag (#3943 review). A field that inherits the
@@ -863,21 +868,15 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
     Ok(targets.len())
 }
 
-/// Whether `field`'s `key` (`/V` or `/DV`, its own or inherited) holds a value, which [`fields`]
-/// reads as none once its value allowance is spent: a stream with data, a list whose first entry
-/// is text, or a string or name that reads as something other than nothing or Off.
-fn unread_value(doc: &Document, field: ObjRef, key: &[u8]) -> bool {
-    let mut node = Some(field);
-    for _ in 0..64 {
-        let Some(r) = node else { break };
-        let obj = doc.get(r);
-        let Some(d) = obj.as_dict() else { break };
-        if let Some(value) = d.get(key) {
-            return holds_value(doc, value);
-        }
-        node = d.reference(b"Parent");
-    }
-    false
+/// Whether the `key` (`/V` or `/DV`) the field `field` was read with holds a value, which the
+/// reading reads as none once its value allowance is spent: a stream with data, a list whose first
+/// entry is text, or a string or name that reads as something other than nothing or Off. The
+/// entry is the one the reading took, on the field or on the one it inherits it from down `/Kids`
+/// ([`Reading::values_at`]).
+fn unread_value(doc: &Document, reading: &Reading, field: ObjRef, key: &[u8]) -> bool {
+    let (v, dv) = reading.values_at.get(&field).copied().unwrap_or_default();
+    let at = if key == b"DV" { dv } else { v };
+    at.is_some_and(|r| holds_own(doc, r, key))
 }
 
 /// Whether a `/V` or `/DV` entry holds a value, read where it is and without converting a long
@@ -896,7 +895,8 @@ fn holds_value(doc: &Document, o: &Object) -> bool {
 
 /// Acrobat's Clear form: every field (or the named ones) back to its default value.
 pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, FormError> {
-    let all = fields(doc);
+    let reading = enumerate(doc);
+    let all = &reading.items;
     if all.is_empty() {
         return Err(FormError::NoForm);
     }
@@ -913,7 +913,7 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
         // A default the reading didn't read (its allowance spent) is unknown, not empty: clearing
         // the field to nothing would lose the value it should go back to. A value it didn't read
         // isn't known to be the default, so it is reset.
-        let unread = |key: &[u8], read: &[String]| read.is_empty() && unread_value(doc, f.obj, key);
+        let unread = |key: &[u8], read: &[String]| read.is_empty() && unread_value(doc, &reading, f.obj, key);
         if unread(b"DV", &f.default) || (f.value == f.default && !unread(b"V", &f.value)) {
             continue;
         }
