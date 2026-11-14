@@ -712,9 +712,33 @@ pub struct Fields {
 }
 
 /// Read all terminal fields and the page-only adoption count in one enumeration.
+///
+/// The last reading on this thread is kept with the state of the document it read
+/// ([`pdfcraft_cos::ReadState`], which every change to the document replaces), and a document
+/// that still reads as that state gets a copy of it instead of a new walk. One form edit reads
+/// the fields in several steps (filling, recalculating, the XFA data, the view), most of them
+/// with nothing changed since the step before: on a form with a thousand fields each walk takes
+/// tens of milliseconds.
 pub fn fields_with_adopted(doc: &Document) -> Fields {
+    let kept = LAST_READING
+        .try_with(|last| match last.try_borrow().as_deref() {
+            Ok(Some((state, fields))) if state.matches(doc) => Some(fields.clone()),
+            _ => None,
+        })
+        .ok()
+        .flatten();
+    if let Some(fields) = kept {
+        return fields;
+    }
     let Reading { items, adopted_page_fields, left_out, .. } = enumerate(doc);
-    Fields { items, adopted_page_fields, left_out }
+    let fields = Fields { items, adopted_page_fields, left_out };
+    // Not kept (the thread is ending, or the slot is in use) costs only a later walk.
+    let _ = LAST_READING.try_with(|last| {
+        if let Ok(mut last) = last.try_borrow_mut() {
+            *last = Some((doc.read_state(), fields.clone()));
+        }
+    });
+    fields
 }
 
 /// One reading of the form: [`Fields`], with the dictionaries of the fields it left out.
@@ -727,21 +751,24 @@ pub(crate) struct Reading {
     pub(crate) values_at: std::collections::HashMap<ObjRef, (Option<ObjRef>, Option<ObjRef>)>,
 }
 
-#[cfg(test)]
 thread_local! {
-    /// Whole-form readings ([`enumerate`]) on this thread.
+    /// The last [`fields_with_adopted`] on this thread, with the state of the document it read.
+    /// One entry: one form's fields, and the objects that document had changed when it was read.
+    static LAST_READING: std::cell::RefCell<Option<(pdfcraft_cos::ReadState, Fields)>> = const { std::cell::RefCell::new(None) };
+    /// Whole-form walks ([`enumerate`]) on this thread.
     static FORM_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has read the whole form.
-#[cfg(test)]
-pub(crate) fn form_reads() -> usize {
-    FORM_READS.with(std::cell::Cell::get)
+/// How many times this thread has walked a whole form: [`fields`] and the readings like it, but
+/// not one answered from the last reading. Per thread, so tests running in parallel don't count
+/// each other's; for tests that check how often an edit reads the form.
+#[doc(hidden)]
+pub fn form_reads_on_this_thread() -> usize {
+    FORM_READS.try_with(std::cell::Cell::get).unwrap_or(0)
 }
 
 pub(crate) fn enumerate(doc: &Document) -> Reading {
-    #[cfg(test)]
-    FORM_READS.with(|n| n.set(n.get() + 1));
+    let _ = FORM_READS.try_with(|n| n.set(n.get().saturating_add(1)));
     let af = acroform(doc);
     let mut page_of = std::collections::HashMap::new();
     let mut annot_index = std::collections::HashMap::new();
@@ -1208,6 +1235,16 @@ fn walk(
                         text.string(doc, mk.as_dict()?.get(b"CA")?)
                     })
                     .flatten(),
+                mouse_up_script: if kind == FieldKind::Text {
+                    let aa = wd.get(b"AA").map(|a| doc.resolve(a));
+                    let action = aa.as_deref().and_then(Object::as_dict).and_then(|aa| aa.get(b"U")).or_else(|| wd.get(b"A"));
+                    action
+                        .filter(|a| doc.resolve(a).as_dict().and_then(|a| a.name(b"S")) == Some(b"JavaScript"))
+                        .and_then(|a| script(doc, a, &mut seen.scripts))
+                } else {
+                    None
+                },
+                mouse_down: wd.get(b"AA").map(|a| doc.resolve(a)).as_deref().and_then(Object::as_dict).is_some_and(|aa| aa.contains(b"D")),
                 list: (kind == FieldKind::List).then(|| {
                     let da = wd.get(b"DA").and_then(|o| text.string(doc, o));
                     appearance::list_rows_drawn_with(doc, da.as_deref().unwrap_or(field_da), Some(d), wd)
