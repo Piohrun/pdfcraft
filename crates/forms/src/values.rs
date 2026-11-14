@@ -784,7 +784,7 @@ fn password_fields(doc: &Document, reading: &Reading) -> Vec<Field> {
 }
 
 /// Whether field `r`'s own `key` (`/V` or `/DV`) holds a value ([`holds_value`]).
-fn holds_own(doc: &Document, r: ObjRef, key: &[u8]) -> bool {
+pub(crate) fn holds_own(doc: &Document, r: ObjRef, key: &[u8]) -> bool {
     doc.get(r).as_dict().and_then(|d| d.get(key).map(|v| holds_value(doc, v))).unwrap_or(false)
 }
 
@@ -1002,29 +1002,12 @@ fn holds_value(doc: &Document, o: &Object) -> bool {
     }
 }
 
-/// Whether `field`'s `key` (`/V` or `/DV`, its own or the nearest ancestor's through `/Parent`)
-/// holds a value ([`holds_value`]), which the reading reads as none once its allowance is spent.
-/// For a caller without the [`Reading`]; one with it asks [`unread_value`], which looks where the
-/// reading took the value.
-fn unread_inherited(doc: &Document, field: ObjRef, key: &[u8]) -> bool {
-    let mut node = Some(field);
-    for _ in 0..64 {
-        let Some(r) = node else { break };
-        let obj = doc.get(r);
-        let Some(d) = obj.as_dict() else { break };
-        if let Some(value) = d.get(key) {
-            return holds_value(doc, value);
-        }
-        node = d.reference(b"Parent");
-    }
-    false
-}
-
 /// Whether this snapshot contains a known default, including a genuinely absent /DV.
 /// A default the reading didn't read (its allowance spent) is unknown, not an instruction to
 /// clear the field. Reuse this policy when exposing reset defaults to other execution layers.
-pub fn default_value_known(doc: &Document, field: &Field) -> bool {
-    !field.default.is_empty() || !unread_inherited(doc, field.obj, b"DV")
+/// Decided by the reading that made `field` ([`Field::default_unread`]).
+pub fn default_value_known(_doc: &Document, field: &Field) -> bool {
+    !field.default_unread
 }
 
 /// Acrobat's Clear form: every field (or the named ones) back to its default value.
@@ -1069,7 +1052,7 @@ pub fn reset_with_formatting(
         // the field to nothing would lose the value it should go back to. A value it didn't read
         // isn't known to be the default, so it is reset.
         let unread = |key: &[u8], read: &[String]| read.is_empty() && unread_value(doc, &reading, f.obj, key);
-        if unread(b"DV", &f.default) || (f.value == f.default && !unread(b"V", &f.value)) {
+        if !default_value_known(doc, f) || (f.value == f.default && !unread(b"V", &f.value)) {
             continue;
         }
         let v = match f.kind {

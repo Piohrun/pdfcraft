@@ -57,7 +57,8 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   counts the fields left out (`Fields::left_out`): opening the file records them as a repair, and
   redaction refuses to remove a widget no field read owns. Clear form (`reset`) leaves a field
   whose default the reading didn't reach as it is, rather than emptying it, looking for that
-  default where the reading took it, down `/Kids`. A save still clears a password value past the
+  default where the reading took it, down `/Kids` (`Field::default_unread`), and a script's reset
+  does the same (`default_value_known`). A save still clears a password value past the
   reading's allowances (`clear_password_values`), looked for the same way. When the form has a
   field with the Password flag and the reading left anything out, what that holds isn't known, so
   the save refuses and writes no file. Any form whose field text passes the 256 MiB allowance is

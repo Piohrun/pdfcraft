@@ -7039,6 +7039,53 @@ fn clear_form_finds_an_unread_default_where_the_reading_took_it() {
     }
 }
 
+/// Whether a default the reading didn't copy is known is decided where the walk took it, so a
+/// script's reset ([`default_value_known`]) agrees with Clear form however the kid names its
+/// parent: directly, through an object that only refers on, naming another field, or not at all;
+/// and for a default 64 levels above the field.
+#[test]
+fn a_script_reset_and_clear_form_agree_where_a_default_was_not_read() {
+    let n = 63;
+    let spend = format!("({})", "x".repeat((1 << 20) - std::mem::size_of::<String>()));
+    let unknown_and_kept = |mut doc: Document, at: ObjRef, holder: u32, label: &str| {
+        let f = fields(&doc).into_iter().find(|f| f.obj == at).unwrap();
+        assert!(f.default.is_empty() && f.default_unread, "{label}: the default isn't read");
+        assert!(!default_value_known(&doc, &f), "{label}: a script's reset");
+        assert_eq!(reset(&mut doc, Some(std::slice::from_ref(&f.name))).unwrap(), 0, "{label}: Clear form");
+        assert_eq!(own_value(&doc, holder).as_deref(), Some("typed"), "{label}");
+    };
+    for (label, parent, five) in [
+        ("direct", " /Parent 3 0 R", "null"),
+        ("refers on", " /Parent 5 0 R", "3 0 R"),
+        ("another field", " /Parent 5 0 R", "<< /T (q) >>"),
+        ("no parent", "", "null"),
+    ] {
+        let list: String = (0..n).map(|i| format!("{} 0 R ", 7 + i)).collect();
+        let mut objs = vec![
+            format!("<< /Type /Catalog /AcroForm << /Fields [{list}3 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) >> >>"),
+            spend.clone(),
+            "<< /T (a) /FT /Tx /V (typed) /DV 2 0 R /Kids [4 0 R] >>".into(),
+            format!("<< /Type /Annot /Subtype /Widget /T (k){parent} /Rect [0 0 100 20] >>"),
+            five.into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (other) /Rect [0 60 100 80] >>".into(),
+        ];
+        objs.extend((0..n).map(|i| format!("<< /FT /Tx /T (f{i}) /V 2 0 R >>")));
+        unknown_and_kept(document(&objs), ObjRef::new(4, 0), 3, label);
+    }
+    // r0 (object 3) holds the value and the default; r64 (object 67) is the field, 64 levels down.
+    let list: String = (0..n).map(|i| format!("{} 0 R ", 68 + i)).collect();
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{list}3 0 R] /DA (/Helv 0 Tf 0 g) >> >>"), spend.clone()];
+    for i in 0..=64u32 {
+        let parent = if i == 0 { String::new() } else { format!(" /Parent {} 0 R", 2 + i) };
+        let kids = if i == 64 { String::new() } else { format!(" /Kids [{} 0 R]", 4 + i) };
+        let own = if i == 0 { " /FT /Tx /V (typed) /DV 2 0 R" } else { "" };
+        let widget = if i == 64 { " /Type /Annot /Subtype /Widget /Rect [0 0 100 20]" } else { "" };
+        objs.push(format!("<<{widget} /T (r{i}){own}{parent}{kids} >>"));
+    }
+    objs.extend((0..n).map(|i| format!("<< /FT /Tx /T (f{i}) /V 2 0 R >>")));
+    unknown_and_kept(document(&objs), ObjRef::new(67, 0), 3, "64 levels down");
+}
+
 /// A field of no type the walk reads, under a field left out for its name or left out for its own:
 /// it has no `/FT`, an unknown one, or one given by reference. What is held back with it is
 /// counted, so the save of a form with a password field refuses; read whole, the value above it,

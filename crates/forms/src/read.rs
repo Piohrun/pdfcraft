@@ -1290,12 +1290,15 @@ fn walk(
     let values = if kind == FieldKind::Text && ff & flags::PASSWORD != 0 { &mut seen.passwords } else { &mut seen.values };
     let (value, default, selected, single_value_is_array) = field_values(doc, d, &inh, kind, &options, values);
     seen.values_at.insert(r, (inh.v_at, inh.dv_at));
+    // Decided where the walk took the default, so Clear form and a script's reset agree.
+    let default_unread = default.is_empty() && inh.dv_at.is_some_and(|at| crate::values::holds_own(doc, at, b"DV"));
     out.push(Field {
         name: inh.name.to_string(),
         obj: r,
         kind,
         value,
         default,
+        default_unread,
         flags: ff,
         max_len: inh.max_len,
         options,
